@@ -1,4 +1,4 @@
-"""Résumé des articles via Anthropic Claude — bilingue FR/EN."""
+"""Résumé des articles via LLM — bilingue FR/EN. Supporte OpenAI et Anthropic."""
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -17,13 +17,11 @@ _EN_TO_FR_TYPE = {
 
 _VALID_TYPES = {"Innovation", "Alerte", "Analyse", "Recherche", "Sécurité", "Actualité"}
 
-CONTENT_MAX_CHARS = 6000  # was 2500 — Claude handles 200K tokens, no need to cripple it
-DEFAULT_MAX_TOKENS = 1200  # was 700 — enough for full structured response
+CONTENT_MAX_CHARS = 6000
+DEFAULT_MAX_TOKENS = 1200
 
 
-def _get_api_key(llm_cfg: dict) -> str:
-    return os.getenv("ANTHROPIC_API_KEY") or llm_cfg.get("anthropic_api_key", "")
-
+# ── Prompt ─────────────────────────────────────────────────────
 
 def _build_prompt(art: dict, profile: str, lang: str) -> str:
     title   = art["title"]
@@ -35,7 +33,7 @@ def _build_prompt(art: dict, profile: str, lang: str) -> str:
             f"You are a {profile} monitoring expert. Summarize this article completely and informatively.\n\n"
             "EXACT Format (respect every field, no extra text):\n"
             "SUMMARY: [3-4 sentences. Precise context and main facts. "
-            "Use **bold** for company/people names and key numbers (e.g. **OpenAI**, **$1.2B**).]\n"
+            "Use **bold** for company/people names and key numbers.]\n"
             "KEY_POINTS:\n"
             "- [verifiable fact with **number**, **name** or date]\n"
             "- [verifiable fact with **number**, **name** or date]\n"
@@ -64,54 +62,95 @@ def _build_prompt(art: dict, profile: str, lang: str) -> str:
         )
 
 
+# ── Providers ──────────────────────────────────────────────────
+
+def _call_openai(client, model: str, max_tokens: int, temperature: float, prompt: str) -> str:
+    resp = client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.choices[0].message.content.strip()
+
+
+def _call_anthropic(client, model: str, max_tokens: int, temperature: float, prompt: str) -> str:
+    resp = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.content[0].text.strip()
+
+
+def _is_rate_limit(e: Exception) -> bool:
+    s = str(e).lower()
+    return any(kw in s for kw in ("rate_limit", "rate limit", "overloaded", "529", "too many requests"))
+
+
+def _build_client(provider: str, llm_cfg: dict):
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY") or llm_cfg.get("openai_api_key", "")
+        if not api_key:
+            return None, "Clé OPENAI_API_KEY introuvable"
+        try:
+            from openai import OpenAI
+            return OpenAI(api_key=api_key), None
+        except ImportError:
+            return None, "Package 'openai' non installé — pip install openai"
+
+    elif provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY") or llm_cfg.get("anthropic_api_key", "")
+        if not api_key:
+            return None, "Clé ANTHROPIC_API_KEY introuvable"
+        try:
+            import anthropic
+            return anthropic.Anthropic(api_key=api_key), None
+        except ImportError:
+            return None, "Package 'anthropic' non installé — pip install anthropic"
+
+    return None, f"Provider inconnu : '{provider}' (valeurs acceptées : openai | anthropic)"
+
+
+# ── Point d'entrée ─────────────────────────────────────────────
+
 def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
     if not articles:
         return []
 
-    llm_cfg  = config.get("llm", {})
-    profile  = config.get("profile_name", "Tech")
-    lang     = config.get("language", "fr")
-    api_key  = _get_api_key(llm_cfg)
+    llm_cfg     = config.get("llm", {})
+    provider    = llm_cfg.get("provider", "openai")
+    model       = llm_cfg.get("model", "gpt-4o-mini")
+    temperature = llm_cfg.get("temperature", 0.3)
+    max_tokens  = llm_cfg.get("max_tokens", DEFAULT_MAX_TOKENS)
+    profile     = config.get("profile_name", "Tech")
+    lang        = config.get("language", "fr")
 
     # Images + favicons en parallèle
     print("   → Récupération des aperçus images…")
     articles = og_image.enrich(articles, max_workers=8)
 
-    if not api_key:
-        print("   ⚠️  [Summarize] Clé ANTHROPIC_API_KEY introuvable.")
+    client, err = _build_client(provider, llm_cfg)
+    if client is None:
+        print(f"   ⚠️  [Summarize] {err}")
         for art in articles:
             _defaults(art)
         return articles
 
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-    except Exception as e:
-        print(f"   ⚠️  [Summarize] Init Anthropic : {e}")
-        for art in articles:
-            _defaults(art)
-        return articles
+    print(f"   → Provider : {provider} | Modèle : {model} | {len(articles)} articles [{lang.upper()}]")
 
-    model       = llm_cfg.get("model", "claude-sonnet-4-6")
-    temperature = llm_cfg.get("temperature", 0.3)
-    max_tokens  = llm_cfg.get("max_tokens", DEFAULT_MAX_TOKENS)
-    print(f"   → Modèle : {model} — {len(articles)} articles [{lang.upper()}] — max_tokens={max_tokens}")
+    call_fn = _call_openai if provider == "openai" else _call_anthropic
 
     def _one(art: dict) -> dict:
         for attempt in range(3):
             try:
                 prompt = _build_prompt(art, profile, lang)
-                resp = client.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                art.update(_parse(resp.content[0].text.strip()))
+                raw = call_fn(client, model, max_tokens, temperature, prompt)
+                art.update(_parse(raw))
                 return art
             except Exception as e:
-                err_str = str(e).lower()
-                if "rate_limit" in err_str or "overloaded" in err_str or "529" in err_str:
+                if _is_rate_limit(e):
                     wait = 10 * (2 ** attempt)  # 10s, 20s, 40s
                     print(f"   ⏳ Rate limit — attente {wait}s (tentative {attempt + 1}/3)…")
                     time.sleep(wait)
@@ -121,18 +160,20 @@ def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
         _defaults(art)
         return art
 
-    # Limit concurrency to avoid rate limits (3 parallel max)
+    # 3 appels LLM en parallèle max pour éviter les rate limits
     with ThreadPoolExecutor(max_workers=3) as ex:
         articles = list(ex.map(_one, articles))
 
     return articles
 
 
+# ── Helpers ────────────────────────────────────────────────────
+
 def _defaults(art: dict):
-    art.setdefault("summary", art.get("content", "")[:500])
-    art.setdefault("highlights", [])
-    art.setdefault("takeaway", "")
-    art.setdefault("actors", [])
+    art.setdefault("summary",      art.get("content", "")[:500])
+    art.setdefault("highlights",   [])
+    art.setdefault("takeaway",     "")
+    art.setdefault("actors",       [])
     art.setdefault("article_type", "Actualité")
 
 

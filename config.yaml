@@ -1,6 +1,7 @@
 active_profile: devops_cloud
 llm:
-  model: claude-sonnet-4-6
+  provider: openai          # openai | anthropic
+  model: gpt-4o-mini
   temperature: 0.3
   max_tokens: 1200
 max_articles: 12
