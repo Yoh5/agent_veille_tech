@@ -455,6 +455,11 @@ body::before {
   border: 1px solid rgba(251,191,36,.2);
   color: var(--amber);
 }
+.toast--error {
+  background: rgba(239,68,68,.07);
+  border: 1px solid rgba(239,68,68,.25);
+  color: #f87171;
+}
 
 /* ── Layout grid ────────────────────────────────── */
 .grid-2 {

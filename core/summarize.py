@@ -1,11 +1,11 @@
 """Résumé des articles via Anthropic Claude — bilingue FR/EN."""
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict
 
 from core import og_image
 
-# Normalise les types retournés en anglais vers les valeurs FR internes
 _EN_TO_FR_TYPE = {
     "Innovation": "Innovation",
     "Alert":      "Alerte",
@@ -17,6 +17,9 @@ _EN_TO_FR_TYPE = {
 
 _VALID_TYPES = {"Innovation", "Alerte", "Analyse", "Recherche", "Sécurité", "Actualité"}
 
+CONTENT_MAX_CHARS = 6000  # was 2500 — Claude handles 200K tokens, no need to cripple it
+DEFAULT_MAX_TOKENS = 1200  # was 700 — enough for full structured response
+
 
 def _get_api_key(llm_cfg: dict) -> str:
     return os.getenv("ANTHROPIC_API_KEY") or llm_cfg.get("anthropic_api_key", "")
@@ -25,7 +28,7 @@ def _get_api_key(llm_cfg: dict) -> str:
 def _build_prompt(art: dict, profile: str, lang: str) -> str:
     title   = art["title"]
     source  = art["source"]
-    content = art.get("content", "")[:2500]
+    content = art.get("content", "")[:CONTENT_MAX_CHARS]
 
     if lang == "en":
         return (
@@ -65,16 +68,15 @@ def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
     if not articles:
         return []
 
-    llm_cfg = config.get("llm", {})
-    profile = config.get("profile_name", "Tech")
-    lang    = config.get("language", "fr")
-    api_key = _get_api_key(llm_cfg)
+    llm_cfg  = config.get("llm", {})
+    profile  = config.get("profile_name", "Tech")
+    lang     = config.get("language", "fr")
+    api_key  = _get_api_key(llm_cfg)
 
-    # Étape 1 : images + favicons en parallèle
+    # Images + favicons en parallèle
     print("   → Récupération des aperçus images…")
     articles = og_image.enrich(articles, max_workers=8)
 
-    # Étape 2 : résumés LLM
     if not api_key:
         print("   ⚠️  [Summarize] Clé ANTHROPIC_API_KEY introuvable.")
         for art in articles:
@@ -92,25 +94,35 @@ def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
 
     model       = llm_cfg.get("model", "claude-sonnet-4-6")
     temperature = llm_cfg.get("temperature", 0.3)
-    max_tokens  = llm_cfg.get("max_tokens", 700)
-    print(f"   → Modèle : {model} — {len(articles)} articles [{lang.upper()}]")
+    max_tokens  = llm_cfg.get("max_tokens", DEFAULT_MAX_TOKENS)
+    print(f"   → Modèle : {model} — {len(articles)} articles [{lang.upper()}] — max_tokens={max_tokens}")
 
     def _one(art: dict) -> dict:
-        try:
-            prompt = _build_prompt(art, profile, lang)
-            resp = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            art.update(_parse(resp.content[0].text.strip()))
-        except Exception as e:
-            print(f"   ⚠️  '{art['title'][:45]}…' : {e}")
-            _defaults(art)
+        for attempt in range(3):
+            try:
+                prompt = _build_prompt(art, profile, lang)
+                resp = client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                art.update(_parse(resp.content[0].text.strip()))
+                return art
+            except Exception as e:
+                err_str = str(e).lower()
+                if "rate_limit" in err_str or "overloaded" in err_str or "529" in err_str:
+                    wait = 10 * (2 ** attempt)  # 10s, 20s, 40s
+                    print(f"   ⏳ Rate limit — attente {wait}s (tentative {attempt + 1}/3)…")
+                    time.sleep(wait)
+                else:
+                    print(f"   ⚠️  '{art['title'][:45]}…' : {e}")
+                    break
+        _defaults(art)
         return art
 
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    # Limit concurrency to avoid rate limits (3 parallel max)
+    with ThreadPoolExecutor(max_workers=3) as ex:
         articles = list(ex.map(_one, articles))
 
     return articles
@@ -129,11 +141,18 @@ def _parse(raw: str) -> dict:
     summary, highlights, takeaway, actors, article_type = "", [], "", [], ""
     section = None
 
+    _SECTION_PREFIXES = [
+        "RÉSUMÉ:", "RESUME:", "SUMMARY:",
+        "POINTS_CLÉS:", "POINTS_CLES:", "KEY_POINTS:", "KEYPOINTS:",
+        "À_RETENIR:", "A_RETENIR:", "TAKEAWAY:",
+        "ACTEURS:", "ACTORS:",
+        "TYPE:",
+    ]
+
     for line in lines:
         s = line.strip()
         u = s.upper()
 
-        # ── Champs FR + EN ──────────────────────────────────────
         if u.startswith(("RÉSUMÉ:", "RESUME:", "SUMMARY:")):
             summary = s.split(":", 1)[1].strip()
             section = "summary"
@@ -154,22 +173,18 @@ def _parse(raw: str) -> dict:
             section = "actors"
 
         elif u.startswith("TYPE:"):
-            raw_type = s.split(":", 1)[1].strip().strip("[]").strip()
-            # Normalise: 1re lettre capitale, puis traduction EN→FR si besoin
-            raw_type = raw_type.capitalize()
+            raw_type = s.split(":", 1)[1].strip().strip("[]").strip().capitalize()
             article_type = _EN_TO_FR_TYPE.get(raw_type, raw_type)
             section = "type"
 
         elif s.startswith("-") and section == "highlights":
             highlights.append(s[1:].strip())
 
-        elif section == "summary" and not any(u.startswith(p) for p in
-                ["POINTS", "À_RETENIR", "A_RETENIR", "TAKEAWAY", "ACTEURS", "ACTORS", "TYPE"]):
+        elif section == "summary" and not any(u.startswith(p) for p in _SECTION_PREFIXES):
             if s:
                 summary += " " + s
 
-        elif section == "takeaway" and not any(u.startswith(p) for p in
-                ["RÉSUMÉ", "RESUME", "SUMMARY", "POINTS", "ACTEURS", "ACTORS", "TYPE"]):
+        elif section == "takeaway" and not any(u.startswith(p) for p in _SECTION_PREFIXES):
             if s:
                 takeaway += " " + s
 

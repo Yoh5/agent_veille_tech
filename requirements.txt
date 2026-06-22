@@ -2,6 +2,7 @@ requests>=2.31.0
 feedparser>=6.0.10
 pyyaml>=6.0.1
 anthropic>=0.40.0
+python-dotenv>=1.0.0
 
 # Web
 fastapi>=0.110.0

@@ -110,9 +110,13 @@ def generate(
     lang = config.get("language", "fr")
     s    = _STATIC.get(lang, _STATIC["fr"])
 
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    time_str = datetime.now().strftime("%H:%M")
+    now      = datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M")
     filepath = os.path.join(output_dir, f"brief_veille_{date_str}.md")
+    # Avoid silent overwrite: append HHmm suffix if a brief already exists for today
+    if os.path.exists(filepath):
+        filepath = os.path.join(output_dir, f"brief_veille_{date_str}_{now.strftime('%H%M')}.md")
 
     profile_name = config.get("profile_name", "Tech")
     profile_icon = config.get("profile_icon", "📡")
@@ -201,7 +205,7 @@ def generate(
         lines += ["---", ""]
 
     lines += [
-        f"*{s['title']} · {datetime.now().strftime('%d/%m/%Y %H:%M')} · {profile_icon} {profile_name} · {model} · {period_label} · {lang.upper()}*",
+        f"*{s['title']} · {now.strftime('%d/%m/%Y %H:%M')} · {profile_icon} {profile_name} · {model} · {period_label} · {lang.upper()}*",
     ]
 
     with open(filepath, "w", encoding="utf-8") as f:

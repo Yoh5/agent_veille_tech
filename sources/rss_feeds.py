@@ -1,8 +1,11 @@
 """Source : Flux RSS génériques."""
 import feedparser
 import re
+import requests
 from datetime import datetime, timedelta
 from typing import List, Dict
+
+RSS_HEADERS = {"User-Agent": "VeilleTech/2.0", "Accept": "application/rss+xml, application/xml, text/xml"}
 
 
 def _parse_date(s: str):
@@ -41,11 +44,13 @@ def fetch(feeds: List[Dict], max_entries_per_feed: int = 8, since_days: int = 7)
             continue
 
         try:
-            parsed = feedparser.parse(url)
+            # Use requests for reliable timeout (feedparser uses urllib without timeout)
+            resp = requests.get(url, headers=RSS_HEADERS, timeout=15)
+            resp.raise_for_status()
+            parsed = feedparser.parse(resp.text)
             count = 0
 
             for entry in parsed.entries[:max_entries_per_feed]:
-                # Date filter
                 pub_date = _parse_date(entry.get("published", "") or entry.get("updated", ""))
                 if pub_date and pub_date < cutoff:
                     continue
@@ -69,6 +74,8 @@ def fetch(feeds: List[Dict], max_entries_per_feed: int = 8, since_days: int = 7)
 
             print(f"   ✓ [{name}] {count} articles")
 
+        except requests.exceptions.Timeout:
+            print(f"   ⚠️  [RSS:{name}] Timeout (15s)")
         except Exception as e:
             print(f"   ⚠️  [RSS:{name}] Erreur : {e}")
 

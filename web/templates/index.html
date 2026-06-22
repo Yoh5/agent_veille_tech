@@ -68,6 +68,13 @@
 </div>
 {% endif %}
 
+{% if pipeline_error %}
+<div class="toast toast--error" style="max-width:100%;margin-bottom:12px;">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  <strong>Erreur pipeline :</strong>&nbsp;{{ pipeline_error }}
+</div>
+{% endif %}
+
 <!-- Recherche libre (en tête) -->
 <div class="card card-free-search">
   <div class="card-header">
@@ -178,11 +185,13 @@
       <div class="running-title">Analyse en cours</div>
       <div class="running-sub">Les briefs sont verrouillés<br>jusqu'à la fin de l'analyse</div>
       <div class="running-steps">
-        <span class="step step--done">Collecte</span>
+        <span class="step {% if pipeline_step == 'fetch' %}step--active{% elif pipeline_step in ('filter','summarize','generate') %}step--done{% endif %}">Collecte</span>
         <span class="step-sep">›</span>
-        <span class="step step--active">Images + LLM</span>
+        <span class="step {% if pipeline_step == 'filter' %}step--active{% elif pipeline_step in ('summarize','generate') %}step--done{% endif %}">Filtre</span>
         <span class="step-sep">›</span>
-        <span class="step">Brief</span>
+        <span class="step {% if pipeline_step == 'summarize' %}step--active{% elif pipeline_step == 'generate' %}step--done{% endif %}">LLM</span>
+        <span class="step-sep">›</span>
+        <span class="step {% if pipeline_step == 'generate' %}step--active{% endif %}">Brief</span>
       </div>
     </div>
 

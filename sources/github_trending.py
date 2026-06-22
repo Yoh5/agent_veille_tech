@@ -1,12 +1,19 @@
-"""Source : GitHub — repos récents et tendance via l'API de recherche publique."""
+"""Source : GitHub — repos récents et tendance via l'API de recherche."""
+import os
 import requests
 from typing import List, Dict
 from datetime import datetime, timedelta
 
-HEADERS = {
-    "Accept": "application/vnd.github.v3+json",
-    "User-Agent": "VeilleTech/2.0",
-}
+
+def _get_headers() -> dict:
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "VeilleTech/2.0",
+    }
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def fetch(query: str = "ai", per_page: int = 8, weight: float = 1.1, since_days: int = 7) -> List[Dict]:
@@ -22,9 +29,15 @@ def fetch(query: str = "ai", per_page: int = 8, weight: float = 1.1, since_days:
                 "order": "desc",
                 "per_page": per_page,
             },
-            headers=HEADERS,
+            headers=_get_headers(),
             timeout=15,
         )
+
+        # Log rate limit status
+        remaining = resp.headers.get("X-RateLimit-Remaining", "?")
+        if resp.status_code == 403:
+            print(f"   ⚠️  [GitHub] Rate limit atteint (set GITHUB_TOKEN pour 5000 req/h)")
+            return []
         resp.raise_for_status()
 
         for repo in resp.json().get("items", []):
@@ -44,7 +57,8 @@ def fetch(query: str = "ai", per_page: int = 8, weight: float = 1.1, since_days:
                 "hn_comments": repo.get("forks_count", 0),
             })
 
-        print(f"   ✓ [GitHub] {len(articles)} repos ({since_days}j)")
+        auth_status = "authentifié" if os.getenv("GITHUB_TOKEN") else f"non-auth, {remaining} req restantes"
+        print(f"   ✓ [GitHub] {len(articles)} repos — {auth_status}")
     except Exception as e:
         print(f"   ⚠️  [GitHub] Erreur : {e}")
 

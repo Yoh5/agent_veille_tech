@@ -9,7 +9,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import config_loader, fetcher, filter, summarize, brief_generator
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+from core import config_loader, fetcher, article_filter, summarize, brief_generator
 
 
 def run(config_path: str = "config.yaml"):
@@ -36,10 +42,10 @@ def run(config_path: str = "config.yaml"):
         return
 
     print(f"\n[3/5] Déduplication + filtrage mots-clés...")
-    filtered, meta = filter.filter_articles(
+    filtered, meta = article_filter.filter_articles(
         raw_articles,
         keywords,
-        dedup_window_days=config.get("dedup_window_days", 3),
+        dedup_window_days=config.get("dedup_window_days", 7),
     )
     print(f"🎯 Articles retenus : {meta['passed_filter']} / {meta['fresh_fetched']} nouveaux")
 
@@ -52,7 +58,7 @@ def run(config_path: str = "config.yaml"):
         return
 
     top_articles = filtered[:max_articles]
-    print(f"   → {len(top_articles)} articles envoyés au LLM")
+    print(f"   → {len(top_articles)} articles envoyés au LLM (triés par score)")
 
     print(f"\n[4/5] Résumé par LLM...")
     summarized = summarize.summarize_batch(top_articles, config)
