@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Veille Tech{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <div class="page-header-left">
+    <div>
+      <h1 class="page-title">Veille Tech</h1>
+      <p class="page-sub">{{ profile_icon }} {{ profile_name }} — {{ profile_desc }}</p>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    {% if running %}
+    <div class="status-indicator">
+      <span class="status-dot status-dot--active"></span>
+      Analyse en cours…
+    </div>
+    {% endif %}
+    <form method="post" action="/run" id="form-run">
+      <input type="hidden" name="period" id="period-run" value="week">
+      <input type="hidden" name="lang"   id="lang-run"   value="fr">
+      <button type="submit" class="btn-run" {% if running %}disabled{% endif %}>
+        {% if running %}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        En cours…
+        {% else %}
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Lancer la veille
+        {% endif %}
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- Barre période + langue -->
+<div class="period-bar">
+  <div class="period-bar-group">
+    <span class="period-label">Période :</span>
+    <div class="period-pills">
+      <button type="button" class="period-pill" data-period="day"   onclick="setPeriod('day')">Hier</button>
+      <button type="button" class="period-pill period-pill--active" data-period="week"  onclick="setPeriod('week')">Cette semaine</button>
+      <button type="button" class="period-pill" data-period="month" onclick="setPeriod('month')">15 jours</button>
+    </div>
+  </div>
+  <div class="period-bar-group" style="margin-left:auto;">
+    <span class="period-label">Langue :</span>
+    <div class="period-pills">
+      <button type="button" class="lang-pill lang-pill--active" data-lang="fr" onclick="setLang('fr')">🇫🇷 FR</button>
+      <button type="button" class="lang-pill" data-lang="en" onclick="setLang('en')">🇬🇧 EN</button>
+    </div>
+  </div>
+</div>
+
+{% if msg == "profile_changed" %}
+<div class="toast toast--success">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+  Profil mis à jour
+</div>
+{% elif msg == "veille_started" %}
+<div class="toast toast--info">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+  Veille lancée — le brief sera disponible à la fin de l'analyse
+</div>
+{% elif msg == "veille_locked" %}
+<div class="toast toast--warning">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+  Briefs verrouillés pendant l'analyse
+</div>
+{% endif %}
+
+<!-- Recherche libre (en tête) -->
+<div class="card card-free-search">
+  <div class="card-header">
+    <span class="card-label">Recherche libre</span>
+    <span class="sources-pills">
+      <span class="source-pill">HN</span>
+      <span class="source-pill">Reddit</span>
+      <span class="source-pill">Dev.to</span>
+      <span class="source-pill">GitHub</span>
+      <span class="source-pill">Lobste.rs</span>
+      <span class="source-pill">ArXiv</span>
+    </span>
+  </div>
+  <form method="post" action="/run-custom" class="free-search-form" id="form-custom">
+    <input type="hidden" name="period" id="period-custom" value="week">
+    <input type="hidden" name="lang"   id="lang-custom"   value="fr">
+    <div class="free-search-row">
+      <input
+        type="text"
+        name="topic"
+        id="topic-input"
+        class="free-search-input"
+        placeholder="Ex: quantum computing, Rust systems, blockchain DeFi, biotech CRISPR…"
+        {% if running %}disabled{% endif %}
+        required
+        autocomplete="off"
+      >
+      <button type="submit" class="btn-free-search" {% if running %}disabled{% endif %}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Analyser
+      </button>
+    </div>
+    <p class="free-search-hint">
+      Entrez n'importe quel sujet — toutes les sources sont interrogées automatiquement
+    </p>
+  </form>
+
+  {% if recent_topics %}
+  <div class="recent-topics">
+    <span class="recent-label">Récemment :</span>
+    <div class="recent-chips">
+      {% for t in recent_topics %}
+      <button
+        type="button"
+        class="recent-chip"
+        onclick="fillSearch({{ t.topic | tojson }}, {{ t.period | tojson }}, {{ t.lang | tojson }})"
+      >
+        {% if t.lang == 'en' %}<span class="recent-chip-lang">EN</span>{% endif %}
+        {{ t.topic }}
+      </button>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="grid-2">
+
+  <!-- Profils prédéfinis -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-label">Profil de veille</span>
+    </div>
+    <form method="post" action="/profile">
+      <div class="profiles-list">
+        {% for key, p in all_profiles.items() %}
+        <label class="profile-row {% if key == profile_key %}profile-row--active{% endif %}">
+          <input type="radio" name="profile" value="{{ key }}"
+                 {% if key == profile_key %}checked{% endif %}
+                 onchange="this.form.submit()" style="display:none">
+          <span class="profile-icon">{{ p.icon }}</span>
+          <div class="profile-text">
+            <span class="profile-name">{{ p.name }}</span>
+            <span class="profile-desc">{{ p.description }}</span>
+          </div>
+          {% if key == profile_key %}
+          <span class="profile-active-badge">Actif</span>
+          {% endif %}
+        </label>
+        {% endfor %}
+      </div>
+    </form>
+  </div>
+
+  <!-- Briefs générés -->
+  <div class="card {% if running %}card--locked{% endif %}">
+    <div class="card-header">
+      <span class="card-label">Briefs générés</span>
+      {% if running %}
+      <span class="card-count card-count--running">
+        <span class="mini-dot"></span>live
+      </span>
+      {% else %}
+      <span class="card-count">{{ count }}</span>
+      {% endif %}
+    </div>
+
+    {% if running %}
+    <div class="running-overlay">
+      <div class="running-ring">
+        <svg class="running-ring-svg" viewBox="0 0 36 36">
+          <circle class="running-ring-track" cx="18" cy="18" r="15" fill="none" stroke-width="2"/>
+          <circle class="running-ring-fill" cx="18" cy="18" r="15" fill="none" stroke-width="2"
+                  stroke-dasharray="30 65" stroke-linecap="round"/>
+        </svg>
+        <span class="running-ring-icon">📡</span>
+      </div>
+      <div class="running-title">Analyse en cours</div>
+      <div class="running-sub">Les briefs sont verrouillés<br>jusqu'à la fin de l'analyse</div>
+      <div class="running-steps">
+        <span class="step step--done">Collecte</span>
+        <span class="step-sep">›</span>
+        <span class="step step--active">Images + LLM</span>
+        <span class="step-sep">›</span>
+        <span class="step">Brief</span>
+      </div>
+    </div>
+
+    {% elif briefs %}
+    <div class="briefs-list">
+      {% for brief in briefs %}
+      <a href="/brief/{{ brief.filename }}" class="brief-row">
+        <div class="brief-row-left">
+          <div class="brief-row-icon">📄</div>
+          <div class="brief-row-text">
+            <span class="brief-date">{{ brief.date }}</span>
+            <span class="brief-articles">{{ brief.article_count }} articles</span>
+          </div>
+        </div>
+        <svg class="brief-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-icon">📭</div>
+      <p>Aucun brief pour l'instant.<br>Lance ta première veille →</p>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+{% if running %}
+<script>
+(function() {
+  var poll = setInterval(function() {
+    fetch('/api/status')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.running) { clearInterval(poll); window.location.href = '/'; }
+      })
+      .catch(function() {});
+  }, 3000);
+})();
+</script>
+{% endif %}
+
+<script>
+// ── Période ──────────────────────────────────────────────────
+function setPeriod(p) {
+  localStorage.setItem('vt-period', p);
+  document.querySelectorAll('.period-pill').forEach(function(btn) {
+    btn.classList.toggle('period-pill--active', btn.dataset.period === p);
+  });
+  ['period-run', 'period-custom'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = p;
+  });
+}
+
+// ── Langue ───────────────────────────────────────────────────
+function setLang(l) {
+  localStorage.setItem('vt-lang', l);
+  document.querySelectorAll('.lang-pill').forEach(function(btn) {
+    btn.classList.toggle('lang-pill--active', btn.dataset.lang === l);
+  });
+  ['lang-run', 'lang-custom'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = l;
+  });
+}
+
+// ── Recherches récentes ───────────────────────────────────────
+function fillSearch(topic, period, lang) {
+  var input = document.getElementById('topic-input');
+  if (input) { input.value = topic; input.focus(); }
+  if (period) setPeriod(period);
+  if (lang)   setLang(lang);
+}
+
+// ── Init depuis localStorage ─────────────────────────────────
+(function() {
+  var p = localStorage.getItem('vt-period') || 'week';
+  var l = localStorage.getItem('vt-lang')   || 'fr';
+  setPeriod(p);
+  setLang(l);
+})();
+</script>
+
+{% endblock %}

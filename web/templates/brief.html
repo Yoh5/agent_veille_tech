@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Brief {{ date }} — Veille Tech{% endblock %}
+{% block content %}
+
+<div class="brief-topbar">
+  <a href="/" class="back-link">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+    Retour
+  </a>
+  <span class="brief-topbar-date">{{ date }}</span>
+</div>
+
+<article class="brief-body markdown-body">
+  {{ html_content | safe }}
+</article>
+
+{% endblock %}
