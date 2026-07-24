@@ -204,9 +204,22 @@ def generate(
 
         lines += ["---", ""]
 
-    lines += [
-        f"*{s['title']} · {now.strftime('%d/%m/%Y %H:%M')} · {profile_icon} {profile_name} · {model} · {period_label} · {lang.upper()}*",
-    ]
+    # Santé des sources (nombre d'articles récupérés, erreurs éventuelles)
+    src_stats = meta.get("sources_stats", {})
+    if src_stats:
+        label = "Sources" if lang != "en" else "Sources"
+        parts = []
+        for name, val in src_stats.items():
+            parts.append(f"⚠ {name} ({val})" if val.startswith("erreur") else f"{name} {val}")
+        lines += [f"*{label} : {' · '.join(parts)}*", ""]
+
+    footer = (f"*{s['title']} · {now.strftime('%d/%m/%Y %H:%M')} · {profile_icon} "
+              f"{profile_name} · {model} · {period_label} · {lang.upper()}")
+    usage = meta.get("llm_usage") or {}
+    if usage.get("cost_usd"):
+        footer += (f" · {usage.get('in', 0)}+{usage.get('out', 0)} tokens "
+                   f"· ~${usage['cost_usd']:.4f}")
+    lines += [footer + "*"]
 
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

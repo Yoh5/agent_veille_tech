@@ -1,10 +1,15 @@
 """Résumé des articles via LLM — bilingue FR/EN. Supporte OpenAI et Anthropic."""
+import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict
 
 from core import og_image
+from core import obs
+
+_log = obs.get_logger("summarize")
 
 _EN_TO_FR_TYPE = {
     "Innovation": "Innovation",
@@ -62,26 +67,68 @@ def _build_prompt(art: dict, profile: str, lang: str) -> str:
         )
 
 
+def _build_prompt_json(art: dict, profile: str, lang: str) -> str:
+    """Variante JSON du prompt : le modèle renvoie un objet structuré,
+    plus fiable à parser que le format texte (qui reste le fallback)."""
+    title   = art["title"]
+    source  = art["source"]
+    content = art.get("content", "")[:CONTENT_MAX_CHARS]
+
+    if lang == "en":
+        return (
+            f"You are a {profile} monitoring expert. Summarize this article completely and informatively.\n\n"
+            "Reply ONLY with a valid JSON object, no extra text, with EXACTLY these keys:\n"
+            '{\n'
+            '  "summary": "3-4 sentences. Precise context and main facts. Use **bold** for company/people names and key numbers.",\n'
+            '  "key_points": ["verifiable fact with **number**/**name**/date", "...", "..."],\n'
+            '  "takeaway": "1 sentence: the most important strategic implication or lesson",\n'
+            '  "actors": ["Org1", "Person2"],\n'
+            '  "type": "one of: Innovation | Alert | Analysis | Research | Security | News"\n'
+            '}\n\n'
+            f"Title: {title}\nSource: {source}\nContent: {content}"
+        )
+    return (
+        f"Tu es un expert en veille {profile}. Résume cet article de façon complète et informative.\n\n"
+        "Réponds UNIQUEMENT avec un objet JSON valide, aucun texte autour, avec EXACTEMENT ces clés :\n"
+        '{\n'
+        '  "summary": "3-4 phrases. Contexte précis, faits principaux. Mets en **gras** les noms d\'entreprises, de personnes et les chiffres.",\n'
+        '  "key_points": ["fait vérifiable avec **chiffre**/**nom**/date", "...", "..."],\n'
+        '  "takeaway": "1 seule phrase : l\'implication stratégique ou la leçon la plus importante",\n'
+        '  "actors": ["Org1", "Personne2"],\n'
+        '  "type": "un parmi : Innovation | Alerte | Analyse | Recherche | Sécurité | Actualité"\n'
+        '}\n\n'
+        f"Titre : {title}\nSource : {source}\nContenu : {content}"
+    )
+
+
 # ── Providers ──────────────────────────────────────────────────
 
-def _call_openai(client, model: str, max_tokens: int, temperature: float, prompt: str) -> str:
+def _call_openai(client, model: str, max_tokens: int, temperature: float, prompt: str):
+    """Retourne (texte, usage) — usage = {'in': prompt_tokens, 'out': completion_tokens}."""
     resp = client.chat.completions.create(
         model=model,
         max_tokens=max_tokens,
         temperature=temperature,
+        response_format={"type": "json_object"},
         messages=[{"role": "user", "content": prompt}],
     )
-    return resp.choices[0].message.content.strip()
+    u = getattr(resp, "usage", None)
+    usage = {"in": getattr(u, "prompt_tokens", 0), "out": getattr(u, "completion_tokens", 0)} if u else {"in": 0, "out": 0}
+    return resp.choices[0].message.content.strip(), usage
 
 
-def _call_anthropic(client, model: str, max_tokens: int, temperature: float, prompt: str) -> str:
+def _call_anthropic(client, model: str, max_tokens: int, temperature: float, prompt: str):
+    """Retourne (texte, usage) — Anthropic n'a pas de mode JSON natif, le format
+    est demandé dans le prompt."""
     resp = client.messages.create(
         model=model,
         max_tokens=max_tokens,
         temperature=temperature,
         messages=[{"role": "user", "content": prompt}],
     )
-    return resp.content[0].text.strip()
+    u = getattr(resp, "usage", None)
+    usage = {"in": getattr(u, "input_tokens", 0), "out": getattr(u, "output_tokens", 0)} if u else {"in": 0, "out": 0}
+    return resp.content[0].text.strip(), usage
 
 
 def _is_rate_limit(e: Exception) -> bool:
@@ -115,6 +162,15 @@ def _build_client(provider: str, llm_cfg: dict):
 
 # ── Point d'entrée ─────────────────────────────────────────────
 
+# Usage/coût du dernier batch résumé — remonté dans meta['llm_usage'] par le pipeline.
+_LAST_USAGE: Dict = {"in": 0, "out": 0, "cost_usd": 0.0, "model": ""}
+
+
+def get_last_usage() -> Dict:
+    """Tokens et coût estimé du dernier appel à summarize_batch."""
+    return dict(_LAST_USAGE)
+
+
 def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
     if not articles:
         return []
@@ -127,35 +183,48 @@ def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
     profile     = config.get("profile_name", "Tech")
     lang        = config.get("language", "fr")
 
-    # Images + favicons en parallèle
-    print("   → Récupération des aperçus images…")
-    articles = og_image.enrich(articles, max_workers=8)
+    # Images + favicons récupérées EN PARALLÈLE des appels LLM :
+    # l'enrichissement n'écrit que og_image/favicon_url, le LLM n'écrit que
+    # summary/highlights/… — aucune clé partagée, donc aucune course
+    _log.info("→ Récupération des aperçus images (en arrière-plan)…")
+    og_executor = ThreadPoolExecutor(max_workers=1)
+    og_future = og_executor.submit(og_image.enrich, articles, 8)
 
     client, err = _build_client(provider, llm_cfg)
     if client is None:
-        print(f"   ⚠️  [Summarize] {err}")
+        _log.warning("[Summarize] %s", err)
         for art in articles:
             _defaults(art)
+        og_future.result()
+        og_executor.shutdown()
         return articles
 
-    print(f"   → Provider : {provider} | Modèle : {model} | {len(articles)} articles [{lang.upper()}]")
+    _log.info("→ Provider : %s | Modèle : %s | %d articles [%s]",
+              provider, model, len(articles), lang.upper())
 
     call_fn = _call_openai if provider == "openai" else _call_anthropic
+
+    # accumulateur de tokens partagé entre les threads (opérations atomiques par clé)
+    usage_total = {"in": 0, "out": 0}
+    usage_lock = threading.Lock()
 
     def _one(art: dict) -> dict:
         for attempt in range(3):
             try:
-                prompt = _build_prompt(art, profile, lang)
-                raw = call_fn(client, model, max_tokens, temperature, prompt)
-                art.update(_parse(raw))
+                prompt = _build_prompt_json(art, profile, lang)
+                raw, usage = call_fn(client, model, max_tokens, temperature, prompt)
+                art.update(_parse_json(raw))
+                with usage_lock:
+                    usage_total["in"] += usage.get("in", 0)
+                    usage_total["out"] += usage.get("out", 0)
                 return art
             except Exception as e:
                 if _is_rate_limit(e):
                     wait = 10 * (2 ** attempt)  # 10s, 20s, 40s
-                    print(f"   ⏳ Rate limit — attente {wait}s (tentative {attempt + 1}/3)…")
+                    _log.warning("⏳ Rate limit — attente %ss (tentative %d/3)…", wait, attempt + 1)
                     time.sleep(wait)
                 else:
-                    print(f"   ⚠️  '{art['title'][:45]}…' : {e}")
+                    _log.warning("'%s…' : %s", art["title"][:45], e)
                     break
         _defaults(art)
         return art
@@ -163,6 +232,19 @@ def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
     # 3 appels LLM en parallèle max pour éviter les rate limits
     with ThreadPoolExecutor(max_workers=3) as ex:
         articles = list(ex.map(_one, articles))
+
+    # attendre la fin de l'enrichissement images avant de rendre la main
+    og_future.result()
+    og_executor.shutdown()
+
+    cost = obs.estimate_cost(model, usage_total["in"], usage_total["out"])
+    _log.info("💰 Tokens : %d in / %d out · coût estimé : $%.4f",
+              usage_total["in"], usage_total["out"], cost)
+    global _LAST_USAGE
+    _LAST_USAGE = {
+        "in": usage_total["in"], "out": usage_total["out"],
+        "cost_usd": round(cost, 4), "model": model,
+    }
 
     return articles
 
@@ -175,6 +257,48 @@ def _defaults(art: dict):
     art.setdefault("takeaway",     "")
     art.setdefault("actors",       [])
     art.setdefault("article_type", "Actualité")
+
+
+def _normalize_type(raw_type: str) -> str:
+    t = (raw_type or "").strip().strip("[]").strip().capitalize()
+    t = _EN_TO_FR_TYPE.get(t, t)
+    return t if t in _VALID_TYPES else "Actualité"
+
+
+def _clean_actors(raw_actors) -> list:
+    if isinstance(raw_actors, str):
+        raw_actors = raw_actors.strip("[]").split(",")
+    out = []
+    for a in raw_actors or []:
+        name = str(a).strip().strip("*").strip()
+        if name and name.lower() not in ("vide", "aucun", "n/a", "none", ""):
+            out.append(name)
+    return out[:4]
+
+
+def _parse_json(raw: str) -> dict:
+    """Parse la réponse JSON du LLM. En cas d'échec (modèle qui dévie),
+    retombe sur le parser texte _parse() — zéro régression."""
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError("JSON n'est pas un objet")
+    except Exception:
+        return _parse(raw)
+
+    summary = str(data.get("summary", "")).strip()
+    highlights = [str(h).strip() for h in (data.get("key_points") or []) if str(h).strip()][:4]
+    takeaway = str(data.get("takeaway", "")).strip()
+    actors = _clean_actors(data.get("actors"))
+    article_type = _normalize_type(str(data.get("type", "")))
+
+    return {
+        "summary":      summary or raw[:600],
+        "highlights":   highlights,
+        "takeaway":     takeaway,
+        "actors":       actors,
+        "article_type": article_type,
+    }
 
 
 def _parse(raw: str) -> dict:
@@ -208,8 +332,9 @@ def _parse(raw: str) -> dict:
         elif u.startswith(("ACTEURS:", "ACTORS:")):
             raw_actors = s.split(":", 1)[1].strip().strip("[]")
             actors = [
-                a.strip() for a in raw_actors.split(",")
-                if a.strip() and a.strip().lower() not in ("vide", "aucun", "n/a", "none", "")
+                a.strip().strip("*").strip() for a in raw_actors.split(",")
+                if a.strip().strip("*").strip()
+                and a.strip().strip("*").strip().lower() not in ("vide", "aucun", "n/a", "none")
             ][:4]
             section = "actors"
 

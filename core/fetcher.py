@@ -2,14 +2,21 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Callable, Tuple
 
+from core import obs
 from sources import hackernews, reddit, rss_feeds, devto, github_trending, lobsters, arxiv
 
+_log = obs.get_logger("fetcher")
 
-def fetch_all(config: dict) -> List[Dict]:
+
+def fetch_all(config: dict) -> Tuple[List[Dict], Dict[str, str]]:
+    """Récupère toutes les sources activées en parallèle.
+
+    Retourne (articles, stats) où stats = {label: "N articles" | "erreur: …"},
+    affiché en pied de brief pour tracer la santé des sources."""
     src_cfg = config.get("sources", {})
     since = config.get("period_days", 7)
 
-    print(f"\n🔍 Profil : {config.get('profile_name', 'Veille')} — {since}j")
+    _log.info("🔍 Profil : %s — %sj", config.get("profile_name", "Veille"), since)
 
     # Build task list: (label, callable, kwargs)
     tasks: List[Tuple[str, Callable, dict]] = []
@@ -84,13 +91,14 @@ def fetch_all(config: dict) -> List[Dict]:
         }))
 
     if not tasks:
-        print("   ⚠️  Aucune source activée dans le profil.")
-        return []
+        _log.warning("⚠️  Aucune source activée dans le profil.")
+        return [], {}
 
     all_articles: List[Dict] = []
+    stats: Dict[str, str] = {}
 
     # Fetch all sources in parallel
-    print(f"📡 Fetch parallèle de {len(tasks)} source(s)…")
+    _log.info("📡 Fetch parallèle de %d source(s)…", len(tasks))
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
         future_to_label = {
             executor.submit(fn, **kwargs): label
@@ -101,7 +109,9 @@ def fetch_all(config: dict) -> List[Dict]:
             try:
                 results = future.result()
                 all_articles.extend(results)
+                stats[label] = f"{len(results)}"
             except Exception as e:
-                print(f"   ⚠️  [{label}] Exception : {e}")
+                _log.warning("⚠️  [%s] Exception : %s", label, e)
+                stats[label] = f"erreur: {type(e).__name__}"
 
-    return all_articles
+    return all_articles, stats

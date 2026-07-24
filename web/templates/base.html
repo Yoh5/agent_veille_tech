@@ -19,6 +19,12 @@
       Veille Tech
     </a>
     <div class="nav-right">
+      <a href="/live" class="nav-pill">⚡ Live{% if watch_enabled %}<span class="nav-live-dot"></span>{% endif %}</a>
+      <form method="post" action="/language" class="nav-lang" title="{{ t.lang if t else 'Langue' }}">
+        <input type="hidden" name="next" value="{{ request.url.path }}">
+        <button type="submit" name="lang" value="fr" class="nav-lang-pill {% if lang == 'fr' %}nav-lang-pill--active{% endif %}">FR</button>
+        <button type="submit" name="lang" value="en" class="nav-lang-pill {% if lang == 'en' %}nav-lang-pill--active{% endif %}">EN</button>
+      </form>
       <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Changer le thème" aria-label="Changer le thème">
         <svg id="icon-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>

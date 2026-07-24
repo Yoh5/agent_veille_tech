@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Live — Veille Tech{% endblock %}
+{% block content %}
+
+<div class="live-header">
+  <div>
+    <h1 class="page-title">⚡ {{ t.live }}</h1>
+    <p class="page-sub">{{ profile_icon }} {{ profile_name }} —
+      {% if watch_enabled %}{{ t.watch_active.replace('{n}', interval|string) }}{% else %}{{ t.watch_inactive }}{% endif %}</p>
+  </div>
+  <div class="watch-actions">
+    <form method="post" action="/watch/scan-now">
+      <button type="submit" class="btn-watch btn-watch--off" title="{{ t.scan_now }}">
+        ⟳ {{ t.scan_now }}
+      </button>
+    </form>
+    <form method="post" action="/watch/toggle">
+      <button type="submit" class="btn-watch {% if watch_enabled %}btn-watch--on{% else %}btn-watch--off{% endif %}">
+        {% if watch_enabled %}◉ {{ t.watch_on }}{% else %}○ {{ t.watch_off }}{% endif %}
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- Bandeau de statistiques -->
+<div class="live-stats">
+  <div class="stat-tile">
+    <span class="stat-value">{{ stat_today }}</span>
+    <span class="stat-label">{{ t.stat_today }}</span>
+  </div>
+  <div class="stat-tile {% if stat_breaking %}stat-tile--breaking{% endif %}">
+    <span class="stat-value">{{ stat_breaking }}</span>
+    <span class="stat-label">⚡ {{ t.stat_breaking }}</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-value">{{ feed | length }}</span>
+    <span class="stat-label">{{ t.stat_total }}</span>
+  </div>
+  <div class="stat-tile">
+    <span class="stat-value">{{ interval }}<span class="stat-unit">min</span></span>
+    <span class="stat-label">{{ t.stat_interval }}</span>
+  </div>
+  <div class="live-status" style="margin-left:auto;">
+    <span class="live-dot {% if watch_enabled %}live-dot--on{% endif %}"></span>
+    {% if watch_enabled %}{{ t.online }}{% else %}{{ t.offline }}{% endif %}
+    {% if last_scan.at %}· {{ t.last_scan }} {{ last_scan.at[11:16] }} (+{{ last_scan.added }}){% endif %}
+  </div>
+</div>
+
+<div class="live-feed" id="live-feed">
+  {% for a in feed %}
+  <div class="live-item {% if a.breaking %}live-item--breaking{% endif %}">
+    <form method="post" action="/live/delete" class="live-delete-form" onsubmit="return confirmDelete(this)">
+      <input type="hidden" name="item_id" value="{{ a.id }}">
+      <button type="submit" class="btn-delete" title="{{ t.delete }}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button>
+    </form>
+    <div class="live-item-body">
+      {% if a.og_image %}
+      <a href="{{ a.url }}" target="_blank" rel="noopener" class="live-item-thumb">
+        <img src="{{ a.og_image }}" alt="" loading="lazy" onerror="this.closest('.live-item-thumb').remove()">
+      </a>
+      {% endif %}
+      <div class="live-item-content">
+        <div class="live-item-head">
+          {% if a.breaking %}<span class="breaking-badge">⚡ BREAKING</span>{% endif %}
+          {% if a.article_type %}<span class="live-type live-type--{{ a.article_type | lower | replace('é','e') | replace('è','e') }}">{{ a.article_type }}</span>{% endif %}
+          <a href="{{ a.url }}" target="_blank" rel="noopener" class="live-item-title">{{ a.title }}</a>
+        </div>
+        <div class="live-item-meta">
+          {% if a.favicon_url %}<img src="{{ a.favicon_url }}" class="live-favicon" alt="" onerror="this.remove()">{% endif %}
+          <span>{{ a.source }}</span>
+          {% if a.seen_at %}<span>{{ t.seen_at }} {{ a.seen_at[11:16] }} · {{ a.seen_at[:10] }}</span>{% endif %}
+          {% if a.hn_points %}<span>⬆ {{ a.hn_points }}</span>{% endif %}
+          {% if a.reddit_score %}<span>▲ {{ a.reddit_score }}</span>{% endif %}
+        </div>
+        {% if a.summary_html %}<div class="live-item-summary">{{ a.summary_html }}</div>{% endif %}
+        {% if a.highlights_html %}
+        <div class="live-item-highlights">
+          <span class="live-highlights-label">◈ {{ t.key_points }}</span>
+          <ul>
+            {% for h in a.highlights_html %}<li>{{ h }}</li>{% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% if a.takeaway_html %}<div class="live-item-takeaway">💡 {{ a.takeaway_html }}</div>{% endif %}
+        {% if a.actor_tags %}
+        <div class="live-item-actors">
+          {% for actor in a.actor_tags %}
+          <span class="actor-chip">
+            {% if actor.favicon %}<img src="{{ actor.favicon }}" alt="" loading="lazy" onerror="this.remove()">{% endif %}
+            {{ actor.name }}
+          </span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  {% if not feed %}
+  <div class="live-empty">
+    <div class="empty-icon">📡</div>
+    <p>{{ t.empty_live | safe }}</p>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+// Suppression : confirmation inline (double-clic dans les 2,5 s)
+function confirmDelete(form) {
+  var btn = form.querySelector('.btn-delete');
+  if (btn.dataset.armed === '1') return true;
+  btn.dataset.armed = '1';
+  btn.classList.add('btn-delete--armed');
+  setTimeout(function() {
+    btn.dataset.armed = '0';
+    btn.classList.remove('btn-delete--armed');
+  }, 2500);
+  return false;
+}
+
+// Rafraîchissement automatique du flux (toutes les 60 s)
+(function () {
+  setInterval(function () {
+    fetch('/api/live')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var feedEl = document.getElementById('live-feed');
+        var current = feedEl.querySelectorAll('.live-item').length;
+        if (data.count > current) { window.location.reload(); }
+      })
+      .catch(function () {});
+  }, 60000);
+})();
+</script>
+
+{% endblock %}
