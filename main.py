@@ -24,7 +24,7 @@ try:
 except ImportError:
     pass
 
-from core import config_loader, fetcher, article_filter, summarize, brief_generator, agent, obs, memory
+from core import config_loader, fetcher, article_filter, summarize, brief_generator, agent, obs, memory, preferences
 
 
 def run(config_path: str = "config.yaml"):
@@ -69,8 +69,14 @@ def run(config_path: str = "config.yaml"):
     # Agent — mémoire : rappel des sujets dominants récents (oriente le jugement
     # vers les développements NOUVEAUX ; "" si pas d'historique ou désactivée)
     profile_key = config.get("active_profile_key", "default")
+    lang = config.get("language", "fr")
     mem_on = config.get("agent", {}).get("enable_memory", True)
-    mem_ctx = memory.recall_context(profile_key, config.get("language", "fr")) if mem_on else ""
+    mem_ctx = memory.recall_context(profile_key, lang) if mem_on else ""
+    # Boucle d'apprentissage : directive de préférence apprise des 👍/👎 du lecteur
+    if config.get("agent", {}).get("enable_feedback", True):
+        pref = preferences.preference_block(profile_key, lang)
+        if pref:
+            mem_ctx = f"{mem_ctx}\n{pref}".strip()
 
     # Agent — jugement de pertinence : le LLM sélectionne/classe par importance
     judged, u_judge = agent.judge_relevance(filtered, config, mem_ctx)

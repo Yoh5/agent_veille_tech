@@ -4,7 +4,7 @@ An autonomous agent that scans **7+ tech sources in parallel**, lets an **LLM ju
 
 > Not a fixed script: the agent *decides what to read*, *acts on its environment* (tool-use to fetch full articles), and *analyses instead of juxtaposing*. Every LLM step fails open — no API key or an LLM error degrades gracefully back to the deterministic pipeline.
 
-**Stack:** Python · FastAPI · OpenAI / Anthropic (config-driven) · APScheduler · Jinja2 · ThreadPoolExecutor · 73 unit tests (no network, no API key)
+**Stack:** Python · FastAPI · OpenAI / Anthropic (config-driven) · APScheduler · Jinja2 · ThreadPoolExecutor · 80 unit tests (no network, no API key)
 
 ---
 
@@ -16,10 +16,11 @@ An autonomous agent that scans **7+ tech sources in parallel**, lets an **LLM ju
 | 🔎 **Tool use (deep-dive)** | Articles the LLM flags as major get their **full page text fetched** so the summariser works on real substance, not a truncated excerpt. Concurrent, bounded. | `core/agent.py:deep_dive` + `core/tools.py` |
 | 🧩 **Cross-article synthesis** | A final pass distils **2–3 underlying trends** connecting the day's articles, placed at the top of the brief. | `core/agent.py:synthesize` |
 | 🧠 **Long-term memory** | The agent records each brief's thematic profile and **reasons across time**: it recalls recent dominant topics into the relevance/synthesis prompts (favour genuinely *new* developments) and reports a **📈 Evolution** section — new / rising / fading topics vs the previous period. | `core/memory.py` |
+| 👍 **Learns from feedback** | The reader rates live-feed articles 👍/👎; the agent **synthesises a preference directive** (LLM) injected into future relevance judgment — it learns the reader's taste beyond keywords. | `core/preferences.py` |
 | 💸 **Cost tracking** | Token usage + estimated USD cost per run (per model), shown in the brief footer and `GET /api/status`. | `core/obs.py` |
 | 🛡️ **SSRF-safe fetching** | The deep-dive tool blocks private / loopback / link-local IPs (incl. `169.254.169.254` cloud metadata), rejects non-HTTP schemes, and **re-validates every redirect hop** (DNS-rebinding defence). | `core/tools.py` |
 
-All three agentic capabilities are **toggleable** in `config.yaml`:
+Every agentic capability is **toggleable** in `config.yaml`:
 
 ```yaml
 agent:
@@ -27,6 +28,7 @@ agent:
   enable_deepdive: true    # fetches full text of articles judged major
   enable_synthesis: true   # cross-article synthesis (2-3 trends) at brief top
   enable_memory: true      # long-term thematic memory: recall past trends + Evolution section
+  enable_feedback: true    # learning loop: reader 👍/👎 -> preference directive in relevance judgment
   relevance_pool: 25       # nb of pre-filtered candidates submitted to the LLM
 ```
 
@@ -69,7 +71,7 @@ python run_web.py         # web UI + live feed → http://localhost:8000
 ```
 
 ```bash
-python -m pytest tests/ -q     # 73 tests, no network / no API key required
+python -m pytest tests/ -q     # 80 tests, no network / no API key required
 ```
 
 The LLM provider is chosen in `config.yaml` (`llm.provider: openai | anthropic`). Without a key, the agentic steps degrade to the plain pipeline instead of failing.
@@ -80,16 +82,16 @@ The LLM provider is chosen in `config.yaml` (`llm.provider: openai | anthropic`)
 - **Two-phase dedup:** filters against a rolling `seen_articles.json` window; only *published* articles are marked seen, so filtered-out ones stay eligible later.
 - **Atomic config writes** + a lock guard the web routes that rewrite `config.yaml`.
 - **Robustness details:** `truststore` for corporate TLS interception, Reddit `.rss` fallback on 403, ArXiv `https` + `quote_plus`, path-traversal guard on brief filenames.
-- **Tested:** `article_filter` (dedup/scoring/Jaccard), `summarize` JSON parsing + text fallback, `agent` (judge/deep-dive/synthesis, monkeypatched — no network), `memory` (topic extraction word-boundary, recall, new/rising/fading diff, fail-open on corrupt store), `tools` (SSRF classification, DNS-rebinding case, HTML→text), `obs` (cost estimation), `config_loader`, `watcher`.
+- **Tested:** `article_filter` (dedup/scoring/Jaccard), `summarize` JSON parsing + text fallback, `agent` (judge/deep-dive/synthesis, monkeypatched — no network), `memory` (topic extraction word-boundary, recall, new/rising/fading diff, fail-open on corrupt store), `preferences` (feedback capping, LLM-synthesised directive, fail-open keeps existing), `tools` (SSRF classification, DNS-rebinding case, HTML→text), `obs` (cost estimation), `config_loader`, `watcher`.
 
 ## 🗂️ Layout
 
 ```
-core/     agent.py · memory.py · llm.py · tools.py · obs.py · fetcher.py · article_filter.py
-          summarize.py · brief_generator.py · watcher.py · notifier.py · config_loader.py
+core/     agent.py · memory.py · preferences.py · llm.py · tools.py · obs.py · fetcher.py
+          article_filter.py · summarize.py · brief_generator.py · watcher.py · notifier.py · config_loader.py
 sources/  one module per source (hackernews, reddit, rss_feeds, devto, lobsters, github, arxiv)
 web/      FastAPI app + Jinja2 templates (dashboard, live feed, brief viewer)
-tests/    73 unit tests
+tests/    80 unit tests
 config.yaml   profiles (AI, DevOps, Cybersecurity, Web, Data Science) + agent/watch settings
 ```
 

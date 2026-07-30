@@ -34,7 +34,7 @@ from fastapi.templating import Jinja2Templates
 parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent)
 
-from core import config_loader, fetcher, article_filter, summarize, brief_generator, watcher, agent, obs, memory
+from core import config_loader, fetcher, article_filter, summarize, brief_generator, watcher, agent, obs, memory, preferences
 
 app = FastAPI(title="Agent de Veille Tech", version="3.0")
 
@@ -330,8 +330,14 @@ def _run_pipeline(config: dict, state: dict):
 
     # Agent — mémoire : rappel des sujets dominants récents (oriente le jugement)
     profile_key = config.get("active_profile_key", "default")
+    _lang = config.get("language", "fr")
     mem_on = config.get("agent", {}).get("enable_memory", True)
-    mem_ctx = memory.recall_context(profile_key, config.get("language", "fr")) if mem_on else ""
+    mem_ctx = memory.recall_context(profile_key, _lang) if mem_on else ""
+    # Boucle d'apprentissage : préférences apprises des 👍/👎 du lecteur
+    if config.get("agent", {}).get("enable_feedback", True):
+        _pref = preferences.preference_block(profile_key, _lang)
+        if _pref:
+            mem_ctx = f"{mem_ctx}\n{_pref}".strip()
 
     # Agent — jugement de pertinence puis deep-dive des articles majeurs
     state["step"] = "judge"
@@ -583,6 +589,23 @@ def live_delete(item_id: str = Form(...)):
         raise HTTPException(status_code=400, detail="Identifiant invalide")
     watcher.delete_from_feed(item_id)
     return RedirectResponse(url="/live", status_code=303)
+
+
+@app.post("/live/feedback")
+def live_feedback(item_id: str = Form(...), rating: str = Form(...)):
+    """Boucle d'apprentissage : 👍/👎 sur un article → l'agent en synthétise une
+    directive de préférence pour orienter les prochaines sélections."""
+    if not re.match(r"^[0-9a-f]{12}$", item_id):
+        raise HTTPException(status_code=400, detail="Identifiant invalide")
+    if rating not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="Note invalide")
+    config = _load_config()
+    profile_key = config.get("active_profile_key", "default")
+    title = next((a.get("title", "") for a in watcher.load_feed() if a.get("id") == item_id), "")
+    if title:
+        preferences.add_feedback(profile_key, title, rating)
+        preferences.synthesize_directive(profile_key, config)   # fail-open
+    return RedirectResponse(url="/live?msg=feedback", status_code=303)
 
 
 @app.post("/brief/delete")
