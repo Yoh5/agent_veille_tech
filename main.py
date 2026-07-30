@@ -24,7 +24,7 @@ try:
 except ImportError:
     pass
 
-from core import config_loader, fetcher, article_filter, summarize, brief_generator
+from core import config_loader, fetcher, article_filter, summarize, brief_generator, agent, obs
 
 
 def run(config_path: str = "config.yaml"):
@@ -66,18 +66,27 @@ def run(config_path: str = "config.yaml"):
         print("❌ Aucun article ne contient les mots-clés du profil.")
         return
 
-    top_articles = filtered[:max_articles]
-    print(f"   → {len(top_articles)} articles envoyés au LLM (triés par score)")
+    # Agent — jugement de pertinence : le LLM sélectionne/classe par importance
+    judged, u_judge = agent.judge_relevance(filtered, config)
+    top_articles = judged[:max_articles]
+    # Agent — deep dive : texte complet des articles jugés majeurs (usage d'outil)
+    agent.deep_dive(top_articles, config)
+    print(f"   → {len(top_articles)} articles envoyés au LLM")
 
     print(f"\n[4/5] Résumé par LLM...")
     summarized = summarize.summarize_batch(top_articles, config)
-    usage = summarize.get_last_usage()
-    if usage.get("cost_usd"):
-        print(f"   💰 {usage['in']} tk in / {usage['out']} tk out · ~${usage['cost_usd']:.4f}")
+    u_sum = summarize.get_last_usage()
+
+    # Agent — synthèse trans-articles (tendances de fond)
+    synthesis, u_synth = agent.synthesize(summarized, config)
 
     print("\n[5/5] Génération du brief...")
     meta["sources_stats"] = source_stats
+    meta["synthesis"] = synthesis
+    usage = obs.merge_usage(llm_cfg.get("model", ""), u_judge, u_sum, u_synth)
     meta["llm_usage"] = usage
+    if usage.get("cost_usd"):
+        print(f"   💰 {usage['in']} tk in / {usage['out']} tk out · ~${usage['cost_usd']:.4f} (jugement+résumés+synthèse)")
     brief_path = brief_generator.generate(
         summarized,
         config=config,

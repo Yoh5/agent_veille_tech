@@ -36,3 +36,20 @@ def test_estimate_cost_correspondance_plus_longue():
 def test_get_logger_nomme():
     log = obs.get_logger("test")
     assert log.name == "veille.test"
+
+
+def test_merge_usage_additionne_et_chiffre():
+    total = obs.merge_usage("gpt-4o-mini",
+                            {"in": 600_000, "out": 200_000}, {"in": 400_000, "out": 100_000},
+                            {"in": 0, "out": 50_000})
+    assert total["in"] == 1_000_000
+    assert total["out"] == 350_000
+    assert total["model"] == "gpt-4o-mini"
+    # 1M in @0.15 + 0.35M out @0.60 = 0.15 + 0.21 = 0.36
+    assert round(total["cost_usd"], 2) == 0.36
+
+
+def test_merge_usage_tolere_none():
+    total = obs.merge_usage("modele-inconnu", None, {"in": 10, "out": 2})
+    assert total["in"] == 10
+    assert total["cost_usd"] == 0.0   # modèle inconnu

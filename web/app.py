@@ -34,7 +34,7 @@ from fastapi.templating import Jinja2Templates
 parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent)
 
-from core import config_loader, fetcher, article_filter, summarize, brief_generator, watcher
+from core import config_loader, fetcher, article_filter, summarize, brief_generator, watcher, agent, obs
 
 app = FastAPI(title="Agent de Veille Tech", version="3.0")
 
@@ -303,6 +303,7 @@ def _build_custom_config(topic: str, base_config: dict, period_days: int = 7, la
         "max_articles": base_config.get("max_articles", 12),
         "dedup_window_days": base_config.get("dedup_window_days", 7),
         "llm": base_config.get("llm", {}),
+        "agent": base_config.get("agent", {}),
         "active_profile_key": "custom",
         "all_profiles": base_config.get("all_profiles", {}),
     }
@@ -327,13 +328,23 @@ def _run_pipeline(config: dict, state: dict):
         print("[WEB] Aucun article pertinent.")
         return
 
+    # Agent — jugement de pertinence puis deep-dive des articles majeurs
+    state["step"] = "judge"
+    judged, u_judge = agent.judge_relevance(filtered, config)
+    top = judged[:config["max_articles"]]
+    agent.deep_dive(top, config)
+
     state["step"] = "summarize"
-    top = filtered[:config["max_articles"]]
     summarized = summarize.summarize_batch(top, config)
-    usage = summarize.get_last_usage()
+    u_sum = summarize.get_last_usage()
+
+    # Agent — synthèse trans-articles
+    synthesis, u_synth = agent.synthesize(summarized, config)
 
     state["step"] = "generate"
     meta["sources_stats"] = source_stats
+    meta["synthesis"] = synthesis
+    usage = obs.merge_usage(config.get("llm", {}).get("model", ""), u_judge, u_sum, u_synth)
     meta["llm_usage"] = usage
     state["llm_usage"] = usage
     brief_generator.generate(summarized, config=config, meta=meta, output_dir=BRIEFS_DIR)

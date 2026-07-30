@@ -1,4 +1,4 @@
-active_profile: devops_cloud
+active_profile: intelligence_artificielle
 language: fr
 llm:
   provider: openai
@@ -7,6 +7,11 @@ llm:
   max_tokens: 1200
 max_articles: 12
 dedup_window_days: 7
+agent:
+  enable_relevance: true    # le LLM juge la pertinence/importance (vs simple filtre mots-clés)
+  enable_deepdive: true     # récupère le texte complet des articles jugés majeurs
+  enable_synthesis: true    # synthèse trans-articles (2-3 tendances) en tête de brief
+  relevance_pool: 25        # nb de candidats pré-filtrés soumis au jugement LLM
 watch:
   enabled: true
   interval_minutes: 30

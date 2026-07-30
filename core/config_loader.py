@@ -49,6 +49,7 @@ def load(path: str = "config.yaml") -> Dict[str, Any]:
             "max_tokens": 600,
         }),
         "watch": raw.get("watch", {}),
+        "agent": raw.get("agent", {}),
         "language": raw.get("language", "fr"),
         "all_profiles": {
             k: {

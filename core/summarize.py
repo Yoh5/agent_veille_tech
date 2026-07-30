@@ -1,6 +1,5 @@
 """Résumé des articles via LLM — bilingue FR/EN. Supporte OpenAI et Anthropic."""
 import json
-import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +7,7 @@ from typing import List, Dict
 
 from core import og_image
 from core import obs
+from core import llm
 
 _log = obs.get_logger("summarize")
 
@@ -101,63 +101,7 @@ def _build_prompt_json(art: dict, profile: str, lang: str) -> str:
     )
 
 
-# ── Providers ──────────────────────────────────────────────────
-
-def _call_openai(client, model: str, max_tokens: int, temperature: float, prompt: str):
-    """Retourne (texte, usage) — usage = {'in': prompt_tokens, 'out': completion_tokens}."""
-    resp = client.chat.completions.create(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        response_format={"type": "json_object"},
-        messages=[{"role": "user", "content": prompt}],
-    )
-    u = getattr(resp, "usage", None)
-    usage = {"in": getattr(u, "prompt_tokens", 0), "out": getattr(u, "completion_tokens", 0)} if u else {"in": 0, "out": 0}
-    return resp.choices[0].message.content.strip(), usage
-
-
-def _call_anthropic(client, model: str, max_tokens: int, temperature: float, prompt: str):
-    """Retourne (texte, usage) — Anthropic n'a pas de mode JSON natif, le format
-    est demandé dans le prompt."""
-    resp = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    u = getattr(resp, "usage", None)
-    usage = {"in": getattr(u, "input_tokens", 0), "out": getattr(u, "output_tokens", 0)} if u else {"in": 0, "out": 0}
-    return resp.content[0].text.strip(), usage
-
-
-def _is_rate_limit(e: Exception) -> bool:
-    s = str(e).lower()
-    return any(kw in s for kw in ("rate_limit", "rate limit", "overloaded", "529", "too many requests"))
-
-
-def _build_client(provider: str, llm_cfg: dict):
-    if provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY") or llm_cfg.get("openai_api_key", "")
-        if not api_key:
-            return None, "Clé OPENAI_API_KEY introuvable"
-        try:
-            from openai import OpenAI
-            return OpenAI(api_key=api_key), None
-        except ImportError:
-            return None, "Package 'openai' non installé — pip install openai"
-
-    elif provider == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY") or llm_cfg.get("anthropic_api_key", "")
-        if not api_key:
-            return None, "Clé ANTHROPIC_API_KEY introuvable"
-        try:
-            import anthropic
-            return anthropic.Anthropic(api_key=api_key), None
-        except ImportError:
-            return None, "Package 'anthropic' non installé — pip install anthropic"
-
-    return None, f"Provider inconnu : '{provider}' (valeurs acceptées : openai | anthropic)"
+# Primitives LLM (client, appel, rate limit) : dans core/llm.py, partagées avec l'agent.
 
 
 # ── Point d'entrée ─────────────────────────────────────────────
@@ -190,7 +134,7 @@ def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
     og_executor = ThreadPoolExecutor(max_workers=1)
     og_future = og_executor.submit(og_image.enrich, articles, 8)
 
-    client, err = _build_client(provider, llm_cfg)
+    client, err = llm.build_client(provider, llm_cfg)
     if client is None:
         _log.warning("[Summarize] %s", err)
         for art in articles:
@@ -202,8 +146,6 @@ def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
     _log.info("→ Provider : %s | Modèle : %s | %d articles [%s]",
               provider, model, len(articles), lang.upper())
 
-    call_fn = _call_openai if provider == "openai" else _call_anthropic
-
     # accumulateur de tokens partagé entre les threads (opérations atomiques par clé)
     usage_total = {"in": 0, "out": 0}
     usage_lock = threading.Lock()
@@ -212,14 +154,14 @@ def summarize_batch(articles: List[Dict], config: dict) -> List[Dict]:
         for attempt in range(3):
             try:
                 prompt = _build_prompt_json(art, profile, lang)
-                raw, usage = call_fn(client, model, max_tokens, temperature, prompt)
+                raw, usage = llm.call(client, provider, model, max_tokens, temperature, prompt)
                 art.update(_parse_json(raw))
                 with usage_lock:
                     usage_total["in"] += usage.get("in", 0)
                     usage_total["out"] += usage.get("out", 0)
                 return art
             except Exception as e:
-                if _is_rate_limit(e):
+                if llm.is_rate_limit(e):
                     wait = 10 * (2 ** attempt)  # 10s, 20s, 40s
                     _log.warning("⏳ Rate limit — attente %ss (tentative %d/3)…", wait, attempt + 1)
                     time.sleep(wait)

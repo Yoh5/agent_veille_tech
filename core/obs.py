@@ -72,3 +72,13 @@ def estimate_cost(model: str, in_tokens: int, out_tokens: int) -> float:
         return (in_tokens / 1_000_000.0) * in_rate + (out_tokens / 1_000_000.0) * out_rate
     except Exception:
         return 0.0
+
+
+def merge_usage(model: str, *usages) -> dict:
+    """Additionne plusieurs dicts d'usage {'in','out'} en un total avec coût :
+    {'in', 'out', 'cost_usd', 'model'}. Sert à cumuler jugement + résumés +
+    synthèse sur un run."""
+    tin = sum(int((u or {}).get("in", 0)) for u in usages)
+    tout = sum(int((u or {}).get("out", 0)) for u in usages)
+    return {"in": tin, "out": tout,
+            "cost_usd": round(estimate_cost(model, tin, tout), 4), "model": model}

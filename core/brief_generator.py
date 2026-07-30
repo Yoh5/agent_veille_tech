@@ -136,6 +136,12 @@ def generate(
         "",
     ]
 
+    # Synthèse agentique (tendances de fond trans-articles) — en tête de brief
+    synthesis = (meta.get("synthesis") or "").strip()
+    if synthesis:
+        header = "## 🧭 Synthèse" if lang != "en" else "## 🧭 Synthesis"
+        lines += [header, "", synthesis, "", "---", ""]
+
     # Tendances
     trends = meta.get("trends", {})
     if trends:

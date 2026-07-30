@@ -1,0 +1,195 @@
+"""Cœur agentique de la veille.
+
+Trois capacités qui font passer le pipeline d'un résumeur déterministe à un
+agent qui décide, agit et raisonne :
+
+- `judge_relevance()` : le LLM LIT les candidats pré-filtrés et sélectionne les
+  plus pertinents/importants selon l'objectif de veille (au lieu du simple
+  score mots-clés), et signale ceux qui méritent un « deep dive ».
+- `deep_dive()` : pour les articles signalés, va chercher le TEXTE COMPLET via
+  l'outil tools.fetch_article_text (l'agent agit sur son environnement).
+- `synthesize()` : après résumé, dégage 2-3 tendances de fond à TRAVERS les
+  articles (analyse, pas juxtaposition).
+
+Toutes les fonctions dégradent proprement : sans clé LLM ou en cas d'erreur,
+elles renvoient l'entrée inchangée / une synthèse vide — le pipeline continue
+avec son comportement historique (zéro régression).
+"""
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Tuple
+
+from core import llm, obs, tools
+
+_log = obs.get_logger("agent")
+
+_ZERO = {"in": 0, "out": 0}
+
+
+# ── 1. Jugement de pertinence ──────────────────────────────────
+
+def _candidates_block(articles: List[Dict]) -> str:
+    lines = []
+    for i, a in enumerate(articles):
+        social = a.get("hn_points", 0) + a.get("reddit_score", 0)
+        snippet = (a.get("content", "") or "")[:160].replace("\n", " ")
+        tag = f"⬆{social}" if social else "—"
+        lines.append(f"[{i}] ({a.get('source', '?')}, {tag}) {a.get('title', '')} — {snippet}")
+    return "\n".join(lines)
+
+
+def _judge_prompt(articles: List[Dict], config: dict) -> str:
+    profile = config.get("profile_name", "Tech")
+    desc    = config.get("profile_description", "")
+    kw      = ", ".join(config.get("keywords", [])[:15])
+    lang    = config.get("language", "fr")
+    keep    = config.get("max_articles", 12)
+
+    if lang == "en":
+        return (
+            f"You are a {profile} watch analyst. Watch objective: {desc}. "
+            f"Tracked keywords: {kw}.\n\n"
+            f"Below are {len(articles)} pre-filtered candidate articles. Select the "
+            f"MOST RELEVANT and IMPORTANT for a decision-maker — favour novelty, "
+            f"strategic impact and signal over mere popularity; drop noise, "
+            f"off-topic and thematic duplicates. Keep at most {keep}.\n\n"
+            "Reply ONLY with JSON:\n"
+            '{"selection": [{"id": <int>, "relevance": <0-100>, "reason": "<short>", "deep_dive": <true|false>}]}\n'
+            "deep_dive=true only if reading the FULL article (not just the title) "
+            "clearly matters (major announcement, dense analysis).\n\n"
+            f"Candidates:\n{_candidates_block(articles)}"
+        )
+    return (
+        f"Tu es analyste de veille {profile}. Objectif de veille : {desc}. "
+        f"Mots-clés suivis : {kw}.\n\n"
+        f"Voici {len(articles)} articles candidats pré-filtrés. Sélectionne les "
+        f"plus PERTINENTS et IMPORTANTS pour un décideur : privilégie la "
+        f"nouveauté, l'impact stratégique et le signal plutôt que la simple "
+        f"popularité ; écarte le bruit, le hors-sujet et les doublons "
+        f"thématiques. Garde-en au plus {keep}.\n\n"
+        "Réponds UNIQUEMENT en JSON :\n"
+        '{"selection": [{"id": <entier>, "relevance": <0-100>, "reason": "<court>", "deep_dive": <true|false>}]}\n'
+        "deep_dive=true seulement si lire le TEXTE COMPLET (pas juste le titre) "
+        "change vraiment la donne (annonce majeure, analyse dense).\n\n"
+        f"Candidats :\n{_candidates_block(articles)}"
+    )
+
+
+def judge_relevance(articles: List[Dict], config: dict) -> Tuple[List[Dict], dict]:
+    """Rerank agentique : le LLM sélectionne/classe les candidats par pertinence
+    et signale les deep-dives. Retourne (articles_ordonnés, usage).
+
+    Fallback (LLM indispo/erreur/JSON illisible) : renvoie `articles` inchangé."""
+    if not config.get("agent", {}).get("enable_relevance", True):
+        return articles, dict(_ZERO)
+    if len(articles) <= 1:
+        return articles, dict(_ZERO)
+
+    pool = int(config.get("agent", {}).get("relevance_pool", 25))
+    candidates = articles[:pool]
+
+    raw, usage, err = llm.complete(config, _judge_prompt(candidates, config),
+                                   json_mode=True, max_tokens=1500)
+    if err:
+        _log.warning("Jugement de pertinence indisponible (%s) — ordre par score conservé", err)
+        return articles, usage
+    data = llm.parse_json_lenient(raw)
+    if not isinstance(data, dict) or "selection" not in data:
+        _log.warning("Jugement : JSON illisible — ordre par score conservé")
+        return articles, usage
+
+    selected: List[Dict] = []
+    for item in data.get("selection", []):
+        try:
+            idx = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= idx < len(candidates)):
+            continue
+        art = candidates[idx]
+        if art.get("_agent_selected"):
+            continue   # doublon d'id renvoyé par le LLM
+        art["_agent_selected"] = True
+        art["relevance"] = max(0, min(100, int(item.get("relevance", 50) or 50)))
+        art["relevance_reason"] = str(item.get("reason", "")).strip()
+        art["deep_dive"] = bool(item.get("deep_dive"))
+        selected.append(art)
+
+    if not selected:
+        return articles, usage
+
+    selected.sort(key=lambda a: a.get("relevance", 0), reverse=True)
+    _log.info("🧠 Jugement : %d/%d candidats retenus (%d deep-dive)",
+              len(selected), len(candidates), sum(1 for a in selected if a.get("deep_dive")))
+    return selected, usage
+
+
+# ── 2. Deep dive (usage d'outil) ───────────────────────────────
+
+def deep_dive(articles: List[Dict], config: dict) -> None:
+    """Pour les articles signalés deep_dive, récupère le texte complet via
+    l'outil et l'injecte dans `content` (enrichit la matière du résumé).
+    Modifie les articles en place. No-op si désactivé."""
+    if not config.get("agent", {}).get("enable_deepdive", True):
+        return
+    targets = [a for a in articles if a.get("deep_dive") and a.get("url")]
+    if not targets:
+        return
+
+    def _one(a: Dict) -> None:
+        text = tools.fetch_article_text(a["url"])
+        # ne remplace que si on a récupéré nettement plus que l'extrait existant
+        if text and len(text) > len(a.get("content", "")):
+            a["content"] = text
+            a["deep_dived"] = True
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        list(ex.map(_one, targets))
+    done = sum(1 for a in targets if a.get("deep_dived"))
+    _log.info("🔎 Deep-dive : texte complet récupéré pour %d/%d article(s)", done, len(targets))
+
+
+# ── 3. Synthèse trans-articles ─────────────────────────────────
+
+def _synth_prompt(articles: List[Dict], config: dict) -> str:
+    profile = config.get("profile_name", "Tech")
+    lang    = config.get("language", "fr")
+    items = []
+    for a in articles:
+        gist = (a.get("takeaway") or a.get("summary") or "")[:200]
+        items.append(f"- {a.get('title', '')} : {gist}")
+    block = "\n".join(items)
+
+    if lang == "en":
+        return (
+            f"You are a {profile} watch analyst. Here are today's selected article "
+            "summaries. Write a SYNTHESIS in English: 2 to 3 underlying trends or "
+            "signals that emerge from THIS selection, each with a short rationale "
+            "(connect the articles, don't repeat them one by one). Markdown: bullets "
+            "starting with **short title** then the explanation. Concise (~120 words max).\n\n"
+            f"Summaries:\n{block}"
+        )
+    return (
+        f"Tu es analyste de veille {profile}. Voici les résumés des articles retenus "
+        "aujourd'hui. Rédige une SYNTHÈSE en français : 2 à 3 tendances ou signaux de "
+        "fond qui se dégagent de CETTE sélection, chacun avec un court raisonnement "
+        "(relie les articles entre eux, ne les répète pas un par un). Markdown : puces "
+        "commençant par **titre court** puis l'explication. Concis (~120 mots max).\n\n"
+        f"Résumés :\n{block}"
+    )
+
+
+def synthesize(articles: List[Dict], config: dict) -> Tuple[str, dict]:
+    """Synthèse trans-articles (2-3 tendances). Retourne (markdown, usage).
+    Fallback : ("", usage) si désactivé, moins de 2 articles, ou erreur LLM."""
+    if not config.get("agent", {}).get("enable_synthesis", True):
+        return "", dict(_ZERO)
+    if len(articles) < 2:
+        return "", dict(_ZERO)
+
+    raw, usage, err = llm.complete(config, _synth_prompt(articles, config),
+                                   json_mode=False, max_tokens=500, temperature=0.4)
+    if err or not raw.strip():
+        _log.warning("Synthèse indisponible (%s)", err or "réponse vide")
+        return "", usage
+    _log.info("🧩 Synthèse générée (%d caractères)", len(raw))
+    return raw.strip(), usage
