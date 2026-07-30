@@ -34,7 +34,7 @@ from fastapi.templating import Jinja2Templates
 parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent)
 
-from core import config_loader, fetcher, article_filter, summarize, brief_generator, watcher, agent, obs
+from core import config_loader, fetcher, article_filter, summarize, brief_generator, watcher, agent, obs, memory
 
 app = FastAPI(title="Agent de Veille Tech", version="3.0")
 
@@ -328,9 +328,14 @@ def _run_pipeline(config: dict, state: dict):
         print("[WEB] Aucun article pertinent.")
         return
 
+    # Agent — mémoire : rappel des sujets dominants récents (oriente le jugement)
+    profile_key = config.get("active_profile_key", "default")
+    mem_on = config.get("agent", {}).get("enable_memory", True)
+    mem_ctx = memory.recall_context(profile_key, config.get("language", "fr")) if mem_on else ""
+
     # Agent — jugement de pertinence puis deep-dive des articles majeurs
     state["step"] = "judge"
-    judged, u_judge = agent.judge_relevance(filtered, config)
+    judged, u_judge = agent.judge_relevance(filtered, config, mem_ctx)
     top = judged[:config["max_articles"]]
     agent.deep_dive(top, config)
 
@@ -338,18 +343,23 @@ def _run_pipeline(config: dict, state: dict):
     summarized = summarize.summarize_batch(top, config)
     u_sum = summarize.get_last_usage()
 
-    # Agent — synthèse trans-articles
-    synthesis, u_synth = agent.synthesize(summarized, config)
+    # Agent — synthèse trans-articles, consciente de la mémoire
+    synthesis, u_synth = agent.synthesize(summarized, config, mem_ctx)
 
     state["step"] = "generate"
     meta["sources_stats"] = source_stats
     meta["synthesis"] = synthesis
+    if mem_on:
+        meta["evolution"] = memory.diff_topics(
+            memory.topics_from_articles(summarized, config.get("keywords", [])), profile_key)
     usage = obs.merge_usage(config.get("llm", {}).get("model", ""), u_judge, u_sum, u_synth)
     meta["llm_usage"] = usage
     state["llm_usage"] = usage
     brief_generator.generate(summarized, config=config, meta=meta, output_dir=BRIEFS_DIR)
     # seuls les articles publiés dans le brief sont marqués « vus »
     article_filter.mark_seen(summarized, config.get("dedup_window_days", 7))
+    if mem_on:
+        memory.record_run(profile_key, summarized, config.get("keywords", []))
     _invalidate_briefs_cache()
     print("[WEB] ✅ Veille terminée.")
 

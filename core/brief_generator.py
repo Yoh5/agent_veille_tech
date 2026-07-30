@@ -142,6 +142,24 @@ def generate(
         header = "## 🧭 Synthèse" if lang != "en" else "## 🧭 Synthesis"
         lines += [header, "", synthesis, "", "---", ""]
 
+    # Évolution vs période précédente (mémoire thématique de l'agent)
+    evo = meta.get("evolution") or {}
+    if any(evo.get(k) for k in ("new", "rising", "fading")):
+        if lang == "en":
+            lines += ["## 📈 Evolution vs previous period", ""]
+            rows = [("🆕 New topics", evo.get("new")),
+                    ("📈 Rising", evo.get("rising")),
+                    ("📉 Fading", evo.get("fading"))]
+        else:
+            lines += ["## 📈 Évolution vs période précédente", ""]
+            rows = [("🆕 Nouveaux sujets", evo.get("new")),
+                    ("📈 En hausse", evo.get("rising")),
+                    ("📉 En baisse", evo.get("fading"))]
+        for label, items in rows:
+            if items:
+                lines.append(f"- **{label} :** {', '.join(items)}")
+        lines += ["", "---", ""]
+
     # Tendances
     trends = meta.get("trends", {})
     if trends:

@@ -24,7 +24,7 @@ try:
 except ImportError:
     pass
 
-from core import config_loader, fetcher, article_filter, summarize, brief_generator, agent, obs
+from core import config_loader, fetcher, article_filter, summarize, brief_generator, agent, obs, memory
 
 
 def run(config_path: str = "config.yaml"):
@@ -66,8 +66,14 @@ def run(config_path: str = "config.yaml"):
         print("❌ Aucun article ne contient les mots-clés du profil.")
         return
 
+    # Agent — mémoire : rappel des sujets dominants récents (oriente le jugement
+    # vers les développements NOUVEAUX ; "" si pas d'historique ou désactivée)
+    profile_key = config.get("active_profile_key", "default")
+    mem_on = config.get("agent", {}).get("enable_memory", True)
+    mem_ctx = memory.recall_context(profile_key, config.get("language", "fr")) if mem_on else ""
+
     # Agent — jugement de pertinence : le LLM sélectionne/classe par importance
-    judged, u_judge = agent.judge_relevance(filtered, config)
+    judged, u_judge = agent.judge_relevance(filtered, config, mem_ctx)
     top_articles = judged[:max_articles]
     # Agent — deep dive : texte complet des articles jugés majeurs (usage d'outil)
     agent.deep_dive(top_articles, config)
@@ -77,8 +83,13 @@ def run(config_path: str = "config.yaml"):
     summarized = summarize.summarize_batch(top_articles, config)
     u_sum = summarize.get_last_usage()
 
-    # Agent — synthèse trans-articles (tendances de fond)
-    synthesis, u_synth = agent.synthesize(summarized, config)
+    # Agent — synthèse trans-articles (tendances de fond), consciente de la mémoire
+    synthesis, u_synth = agent.synthesize(summarized, config, mem_ctx)
+
+    # Agent — évolution vs période précédente (calculée AVANT d'enregistrer ce run)
+    if mem_on:
+        current_topics = memory.topics_from_articles(summarized, keywords)
+        meta["evolution"] = memory.diff_topics(current_topics, profile_key)
 
     print("\n[5/5] Génération du brief...")
     meta["sources_stats"] = source_stats
@@ -97,6 +108,10 @@ def run(config_path: str = "config.yaml"):
     # Ne marquer « vus » QUE les articles réellement publiés dans le brief :
     # les autres restent éligibles pour les prochains runs
     article_filter.mark_seen(summarized, config.get("dedup_window_days", 7))
+
+    # Agent — mémoriser le profil thématique de ce brief (pour les prochains runs)
+    if mem_on:
+        memory.record_run(profile_key, summarized, keywords)
 
     # Notification e-mail (désactivée par défaut — notifications.email de config.yaml)
     from core import notifier

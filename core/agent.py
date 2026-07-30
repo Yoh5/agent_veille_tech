@@ -37,17 +37,19 @@ def _candidates_block(articles: List[Dict]) -> str:
     return "\n".join(lines)
 
 
-def _judge_prompt(articles: List[Dict], config: dict) -> str:
+def _judge_prompt(articles: List[Dict], config: dict, memory_context: str = "") -> str:
     profile = config.get("profile_name", "Tech")
     desc    = config.get("profile_description", "")
     kw      = ", ".join(config.get("keywords", [])[:15])
     lang    = config.get("language", "fr")
     keep    = config.get("max_articles", 12)
+    mem     = f"{memory_context}\n\n" if memory_context else ""
 
     if lang == "en":
         return (
             f"You are a {profile} watch analyst. Watch objective: {desc}. "
             f"Tracked keywords: {kw}.\n\n"
+            f"{mem}"
             f"Below are {len(articles)} pre-filtered candidate articles. Select the "
             f"MOST RELEVANT and IMPORTANT for a decision-maker — favour novelty, "
             f"strategic impact and signal over mere popularity; drop noise, "
@@ -61,6 +63,7 @@ def _judge_prompt(articles: List[Dict], config: dict) -> str:
     return (
         f"Tu es analyste de veille {profile}. Objectif de veille : {desc}. "
         f"Mots-clés suivis : {kw}.\n\n"
+        f"{mem}"
         f"Voici {len(articles)} articles candidats pré-filtrés. Sélectionne les "
         f"plus PERTINENTS et IMPORTANTS pour un décideur : privilégie la "
         f"nouveauté, l'impact stratégique et le signal plutôt que la simple "
@@ -74,9 +77,10 @@ def _judge_prompt(articles: List[Dict], config: dict) -> str:
     )
 
 
-def judge_relevance(articles: List[Dict], config: dict) -> Tuple[List[Dict], dict]:
+def judge_relevance(articles: List[Dict], config: dict, memory_context: str = "") -> Tuple[List[Dict], dict]:
     """Rerank agentique : le LLM sélectionne/classe les candidats par pertinence
-    et signale les deep-dives. Retourne (articles_ordonnés, usage).
+    et signale les deep-dives. `memory_context` (mémoire de veille récente) oriente
+    la sélection vers les développements nouveaux. Retourne (articles_ordonnés, usage).
 
     Fallback (LLM indispo/erreur/JSON illisible) : renvoie `articles` inchangé."""
     if not config.get("agent", {}).get("enable_relevance", True):
@@ -87,7 +91,7 @@ def judge_relevance(articles: List[Dict], config: dict) -> Tuple[List[Dict], dic
     pool = int(config.get("agent", {}).get("relevance_pool", 25))
     candidates = articles[:pool]
 
-    raw, usage, err = llm.complete(config, _judge_prompt(candidates, config),
+    raw, usage, err = llm.complete(config, _judge_prompt(candidates, config, memory_context),
                                    json_mode=True, max_tokens=1500)
     if err:
         _log.warning("Jugement de pertinence indisponible (%s) — ordre par score conservé", err)
@@ -150,9 +154,10 @@ def deep_dive(articles: List[Dict], config: dict) -> None:
 
 # ── 3. Synthèse trans-articles ─────────────────────────────────
 
-def _synth_prompt(articles: List[Dict], config: dict) -> str:
+def _synth_prompt(articles: List[Dict], config: dict, memory_context: str = "") -> str:
     profile = config.get("profile_name", "Tech")
     lang    = config.get("language", "fr")
+    mem     = f"{memory_context}\n\n" if memory_context else ""
     items = []
     for a in articles:
         gist = (a.get("takeaway") or a.get("summary") or "")[:200]
@@ -161,32 +166,34 @@ def _synth_prompt(articles: List[Dict], config: dict) -> str:
 
     if lang == "en":
         return (
-            f"You are a {profile} watch analyst. Here are today's selected article "
+            f"You are a {profile} watch analyst. {mem}Here are today's selected article "
             "summaries. Write a SYNTHESIS in English: 2 to 3 underlying trends or "
             "signals that emerge from THIS selection, each with a short rationale "
-            "(connect the articles, don't repeat them one by one). Markdown: bullets "
-            "starting with **short title** then the explanation. Concise (~120 words max).\n\n"
+            "(connect the articles, don't repeat them one by one; note continuity or "
+            "breaks vs the recent memory when relevant). Markdown: bullets starting with "
+            "**short title** then the explanation. Concise (~120 words max).\n\n"
             f"Summaries:\n{block}"
         )
     return (
-        f"Tu es analyste de veille {profile}. Voici les résumés des articles retenus "
+        f"Tu es analyste de veille {profile}. {mem}Voici les résumés des articles retenus "
         "aujourd'hui. Rédige une SYNTHÈSE en français : 2 à 3 tendances ou signaux de "
         "fond qui se dégagent de CETTE sélection, chacun avec un court raisonnement "
-        "(relie les articles entre eux, ne les répète pas un par un). Markdown : puces "
-        "commençant par **titre court** puis l'explication. Concis (~120 mots max).\n\n"
+        "(relie les articles entre eux, ne les répète pas un par un ; signale la continuité "
+        "ou les ruptures vs la mémoire récente si pertinent). Markdown : puces commençant "
+        "par **titre court** puis l'explication. Concis (~120 mots max).\n\n"
         f"Résumés :\n{block}"
     )
 
 
-def synthesize(articles: List[Dict], config: dict) -> Tuple[str, dict]:
-    """Synthèse trans-articles (2-3 tendances). Retourne (markdown, usage).
-    Fallback : ("", usage) si désactivé, moins de 2 articles, ou erreur LLM."""
+def synthesize(articles: List[Dict], config: dict, memory_context: str = "") -> Tuple[str, dict]:
+    """Synthèse trans-articles (2-3 tendances), consciente de la mémoire récente.
+    Retourne (markdown, usage). Fallback : ("", usage) si désactivé, <2 articles, ou erreur LLM."""
     if not config.get("agent", {}).get("enable_synthesis", True):
         return "", dict(_ZERO)
     if len(articles) < 2:
         return "", dict(_ZERO)
 
-    raw, usage, err = llm.complete(config, _synth_prompt(articles, config),
+    raw, usage, err = llm.complete(config, _synth_prompt(articles, config, memory_context),
                                    json_mode=False, max_tokens=500, temperature=0.4)
     if err or not raw.strip():
         _log.warning("Synthèse indisponible (%s)", err or "réponse vide")
