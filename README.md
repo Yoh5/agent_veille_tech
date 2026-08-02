@@ -1,5 +1,7 @@
 # 🤖 Tech Watch Agent — Autonomous LLM agent for technology intelligence
 
+[![tests](https://github.com/Yoh5/agent_veille_tech/actions/workflows/tests.yml/badge.svg)](https://github.com/Yoh5/agent_veille_tech/actions/workflows/tests.yml)
+
 An autonomous agent that scans **7+ tech sources in parallel**, lets an **LLM judge which stories actually matter**, **fetches the full text of the important ones itself** (with SSRF protection), writes structured summaries, and produces a **cross-article synthesis of the emerging trends** — delivered as a daily Markdown brief or a live web feed.
 
 > Not a fixed script: the agent *decides what to read*, *acts on its environment* (tool-use to fetch full articles), and *analyses instead of juxtaposing*. Every LLM step fails open — no API key or an LLM error degrades gracefully back to the deterministic pipeline.
