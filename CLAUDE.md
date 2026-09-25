@@ -96,4 +96,16 @@ The active profile is set by `active_profile: <key>`. The web UI's `/profile` PO
 - **RSS feeds**: Use `requests.get(..., timeout=15)` then pass content to `feedparser.parse()` — avoids feedparser's no-timeout urllib behavior.
 - **ArXiv**: Uses `https://` (not http) and `urllib.parse.quote_plus()` for query encoding.
 - **Web routes**: `GET /` dashboard, `GET /brief/{filename}`, `POST /run`, `POST /run-custom` (custom topic), `POST /profile`, `GET /api/status`. The run endpoints reserve `running=True` inside the lock before scheduling (no double-launch on rapid double POST); "nothing found" outcomes are reported via `_pipeline_state["message"]`.
+- **Untrusted content in prompts**: article snippets and deep-dived page text come from public
+  pages, so an attacker controls part of them. Both prompts that receive them — `summarize._build_prompt`
+  and `agent._judge_prompt` — fence the content between `<<<CONTENU … CONTENU>>>` (or `CANDIDATS`),
+  announce it as data rather than instructions, and neutralise the closing delimiter inside the content
+  itself (`_fence`). The instruction line always comes after the fenced block. This does not make
+  injection impossible; it makes it visible and much harder.
+- **Decision trail (optional)**: `core/trail.py` wires [glassbox](../glassbox) onto `judge_relevance`
+  and `deep_dive` when `agent.trail: true`. Each judgement records the prompt actually sent — untrusted
+  snippets included — as hash-chained evidence, so a surprising selection can be traced back to the text
+  that caused it. `python -m glassbox trace output/trail/ledger.jsonl --evidence output/trail/evidence
+  --action select`. Off by default; without glassbox installed it degrades to a no-op, like every other
+  agentic capability here.
 - **Tests**: `tests/` covers article_filter (two-phase dedup, scoring), summarize `_parse`, and config_loader. Pure unit tests — no network, no API key.
