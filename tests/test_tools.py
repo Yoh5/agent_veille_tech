@@ -69,3 +69,95 @@ def test_html_to_text_retire_script_style_et_balises():
 def test_html_to_text_vide():
     assert tools._html_to_text("") == ""
     assert tools._html_to_text(None) == ""
+
+
+# ── Redirections : le saut que la garde doit revalider ─────────
+#
+# C'est le chemin par lequel un SSRF passe en pratique. L'URL de départ est
+# publique et passe la garde ; c'est la *cible* de la redirection qui vise
+# l'intérieur. La docstring promettait la revalidation, rien ne la vérifiait.
+
+class _FakeResponse:
+    def __init__(self, status=200, headers=None, body=b""):
+        self.status_code = status
+        self.headers = headers or {}
+        self._body = body
+        self.closed = False
+
+    @property
+    def is_redirect(self):
+        return self.status_code in (301, 302, 303, 307, 308)
+
+    def iter_content(self, chunk_size=16384):
+        yield self._body
+
+    def close(self):
+        self.closed = True
+
+
+def _route(monkeypatch, pages, public_hosts):
+    """Un faux réseau : `pages` mappe une URL à une réponse, `public_hosts` dit
+    quels noms résolvent en IP publique."""
+    asked = []
+
+    def fake_get(url, **kwargs):
+        asked.append(url)
+        return pages[url]
+
+    monkeypatch.setattr(tools.requests, "get", fake_get)
+    monkeypatch.setattr(tools, "_host_is_safe", lambda host: host in public_hosts)
+    return asked
+
+
+def test_une_redirection_vers_une_adresse_interne_est_refusee(monkeypatch):
+    pages = {
+        "https://blog.example.net/a": _FakeResponse(
+            302, {"Location": "http://169.254.169.254/latest/meta-data/"}),
+    }
+    asked = _route(monkeypatch, pages, public_hosts={"blog.example.net"})
+
+    assert tools.fetch_article_text("https://blog.example.net/a") == ""
+    # La cible interne n'a jamais été demandée : refusée avant la requête.
+    assert asked == ["https://blog.example.net/a"]
+
+
+def test_une_redirection_vers_une_cible_publique_est_suivie(monkeypatch):
+    pages = {
+        "https://blog.example.net/a": _FakeResponse(301, {"Location": "https://cdn.example.org/b"}),
+        "https://cdn.example.org/b": _FakeResponse(
+            200, {"Content-Type": "text/html"}, b"<p>Bonjour</p>"),
+    }
+    _route(monkeypatch, pages, public_hosts={"blog.example.net", "cdn.example.org"})
+
+    assert "Bonjour" in tools.fetch_article_text("https://blog.example.net/a")
+
+
+def test_une_boucle_de_redirections_s_arrete(monkeypatch):
+    pages = {
+        "https://a.example.net/": _FakeResponse(302, {"Location": "https://b.example.net/"}),
+        "https://b.example.net/": _FakeResponse(302, {"Location": "https://a.example.net/"}),
+    }
+    asked = _route(monkeypatch, pages, public_hosts={"a.example.net", "b.example.net"})
+
+    assert tools.fetch_article_text("https://a.example.net/") == ""
+    assert len(asked) <= tools._MAX_REDIRECTS + 1
+
+
+def test_une_redirection_relative_est_resolue_avant_la_garde(monkeypatch):
+    """`Location: /interne` ne doit pas contourner la revalidation."""
+    pages = {
+        "https://blog.example.net/a": _FakeResponse(302, {"Location": "/autre"}),
+        "https://blog.example.net/autre": _FakeResponse(
+            200, {"Content-Type": "text/html"}, b"<p>Suite</p>"),
+    }
+    _route(monkeypatch, pages, public_hosts={"blog.example.net"})
+
+    assert "Suite" in tools.fetch_article_text("https://blog.example.net/a")
+
+
+def test_une_reponse_non_html_est_ignoree(monkeypatch):
+    pages = {"https://blog.example.net/a": _FakeResponse(
+        200, {"Content-Type": "application/pdf"}, b"%PDF-1.7")}
+    _route(monkeypatch, pages, public_hosts={"blog.example.net"})
+
+    assert tools.fetch_article_text("https://blog.example.net/a") == ""

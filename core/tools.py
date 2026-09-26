@@ -26,6 +26,21 @@ _TIMEOUT = 12
 
 
 # ── Garde-fou SSRF ─────────────────────────────────────────────
+#
+# Ce qu'il couvre : le schéma (http/https seulement), toutes les IP résolues
+# du host — une seule adresse privée suffit à refuser — et chaque saut de
+# redirection, revalidé avant d'être suivi, y compris quand `Location` est
+# relatif. Des tests le vérifient sans toucher au réseau.
+#
+# Ce qu'il ne couvre PAS, et c'est écrit ici parce qu'un lecteur mérite de le
+# savoir : le **DNS rebinding**. On résout le nom pour le vérifier, puis
+# `requests` le résout une seconde fois pour se connecter. Qui contrôle la
+# zone DNS peut répondre une IP publique à la première question et 127.0.0.1
+# à la seconde. Fermer ça demande de se connecter à l'IP validée en portant
+# le nom d'hôte dans l'en-tête Host et dans le SNI — ce n'est pas fait.
+#
+# La bonne réponse à cette limite n'est pas de la taire : « fetch anti-SSRF »
+# décrit une garde réelle et testée, pas une garantie.
 
 def _ip_is_public(ip_str: str) -> bool:
     try:

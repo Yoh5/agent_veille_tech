@@ -20,7 +20,7 @@ An autonomous agent that scans **7+ tech sources in parallel**, lets an **LLM ju
 | 🧠 **Long-term memory** | The agent records each brief's thematic profile and **reasons across time**: it recalls recent dominant topics into the relevance/synthesis prompts (favour genuinely *new* developments) and reports a **📈 Evolution** section — new / rising / fading topics vs the previous period. | `core/memory.py` |
 | 👍 **Learns from feedback** | The reader rates live-feed articles 👍/👎; the agent **synthesises a preference directive** (LLM) injected into future relevance judgment — it learns the reader's taste beyond keywords. | `core/preferences.py` |
 | 💸 **Cost tracking** | Token usage + estimated USD cost per run (per model), shown in the brief footer and `GET /api/status`. | `core/obs.py` |
-| 🛡️ **SSRF-safe fetching** | The deep-dive tool blocks private / loopback / link-local IPs (incl. `169.254.169.254` cloud metadata), rejects non-HTTP schemes, and **re-validates every redirect hop** (DNS-rebinding defence). | `core/tools.py` |
+| 🛡️ **SSRF-safe fetching** | The deep-dive tool rejects non-HTTP schemes, refuses a host unless **every** resolved address is public (blocking private / loopback / link-local, incl. `169.254.169.254` cloud metadata), and **re-validates every redirect hop** before following it — relative `Location` included. It does **not** defend against DNS rebinding: the name is resolved once to check it and again to connect, and closing that needs connecting to the validated IP while carrying the hostname in Host and SNI. Stated rather than implied. | `core/tools.py` |
 
 Every agentic capability is **toggleable** in `config.yaml`:
 
@@ -84,7 +84,7 @@ The LLM provider is chosen in `config.yaml` (`llm.provider: openai | anthropic`)
 - **Two-phase dedup:** filters against a rolling `seen_articles.json` window; only *published* articles are marked seen, so filtered-out ones stay eligible later.
 - **Atomic config writes** + a lock guard the web routes that rewrite `config.yaml`.
 - **Robustness details:** `truststore` for corporate TLS interception, Reddit `.rss` fallback on 403, ArXiv `https` + `quote_plus`, path-traversal guard on brief filenames.
-- **Tested:** `article_filter` (dedup/scoring/Jaccard), `summarize` JSON parsing + text fallback, `agent` (judge/deep-dive/synthesis, monkeypatched — no network), `memory` (topic extraction word-boundary, recall, new/rising/fading diff, fail-open on corrupt store), `preferences` (feedback capping, LLM-synthesised directive, fail-open keeps existing), `tools` (SSRF classification, DNS-rebinding case, HTML→text), `obs` (cost estimation), `config_loader`, `watcher`.
+- **Tested:** `article_filter` (dedup/scoring/Jaccard), `summarize` JSON parsing + text fallback, `agent` (judge/deep-dive/synthesis, monkeypatched — no network), `memory` (topic extraction word-boundary, recall, new/rising/fading diff, fail-open on corrupt store), `preferences` (feedback capping, LLM-synthesised directive, fail-open keeps existing), `tools` (SSRF classification, a host resolving to a private address, redirects to an internal target / loops / relative `Location`, HTML→text), `obs` (cost estimation), `config_loader`, `watcher`.
 
 ## 🗂️ Layout
 
