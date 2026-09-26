@@ -4,8 +4,8 @@
 
 <div class="live-header">
   <div>
-    <h1 class="page-title">⚡ {{ t.live }}</h1>
-    <p class="page-sub">{{ profile_icon }} {{ profile_name }} —
+    <h1 class="page-title">{{ t.live }}</h1>
+    <p class="page-sub">{{ profile_name }} —
       {% if watch_enabled %}{{ t.watch_active.replace('{n}', interval|string) }}{% else %}{{ t.watch_inactive }}{% endif %}</p>
   </div>
   <div class="watch-actions">
@@ -30,7 +30,7 @@
   </div>
   <div class="stat-tile {% if stat_breaking %}stat-tile--breaking{% endif %}">
     <span class="stat-value">{{ stat_breaking }}</span>
-    <span class="stat-label">⚡ {{ t.stat_breaking }}</span>
+    <span class="stat-label">{{ t.stat_breaking }}</span>
   </div>
   <div class="stat-tile">
     <span class="stat-value">{{ feed | length }}</span>
@@ -50,26 +50,6 @@
 <div class="live-feed" id="live-feed">
   {% for a in feed %}
   <div class="live-item {% if a.breaking %}live-item--breaking{% endif %}">
-    <form method="post" action="/live/delete" class="live-delete-form" onsubmit="return confirmDelete(this)">
-      <input type="hidden" name="item_id" value="{{ a.id }}">
-      <button type="submit" class="btn-delete" title="{{ t.delete }}">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-      </button>
-    </form>
-    <div class="live-fb" style="position:absolute;top:8px;left:8px;display:flex;gap:4px;z-index:2;">
-      <form method="post" action="/live/feedback" style="margin:0;">
-        <input type="hidden" name="item_id" value="{{ a.id }}"><input type="hidden" name="rating" value="up">
-        <button type="submit" title="{% if lang == 'en' %}Relevant — teach the agent{% else %}Pertinent — apprends à l'agent{% endif %}"
-          style="background:none;border:1px solid rgba(120,120,120,.3);border-radius:6px;cursor:pointer;font-size:12px;padding:2px 5px;opacity:.55;transition:opacity .15s"
-          onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.55">👍</button>
-      </form>
-      <form method="post" action="/live/feedback" style="margin:0;">
-        <input type="hidden" name="item_id" value="{{ a.id }}"><input type="hidden" name="rating" value="down">
-        <button type="submit" title="{% if lang == 'en' %}Off-topic — teach the agent{% else %}Hors-sujet — apprends à l'agent{% endif %}"
-          style="background:none;border:1px solid rgba(120,120,120,.3);border-radius:6px;cursor:pointer;font-size:12px;padding:2px 5px;opacity:.55;transition:opacity .15s"
-          onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.55">👎</button>
-      </form>
-    </div>
     <div class="live-item-body">
       {% if a.og_image %}
       <a href="{{ a.url }}" target="_blank" rel="noopener" class="live-item-thumb">
@@ -78,7 +58,7 @@
       {% endif %}
       <div class="live-item-content">
         <div class="live-item-head">
-          {% if a.breaking %}<span class="breaking-badge">⚡ BREAKING</span>{% endif %}
+          {% if a.breaking %}<span class="breaking-badge">signalé</span>{% endif %}
           {% if a.article_type %}<span class="live-type live-type--{{ a.article_type | lower | replace('é','e') | replace('è','e') }}">{{ a.article_type }}</span>{% endif %}
           <a href="{{ a.url }}" target="_blank" rel="noopener" class="live-item-title">{{ a.title }}</a>
         </div>
@@ -92,13 +72,13 @@
         {% if a.summary_html %}<div class="live-item-summary">{{ a.summary_html }}</div>{% endif %}
         {% if a.highlights_html %}
         <div class="live-item-highlights">
-          <span class="live-highlights-label">◈ {{ t.key_points }}</span>
+          <span class="live-highlights-label">{{ t.key_points }}</span>
           <ul>
             {% for h in a.highlights_html %}<li>{{ h }}</li>{% endfor %}
           </ul>
         </div>
         {% endif %}
-        {% if a.takeaway_html %}<div class="live-item-takeaway">💡 {{ a.takeaway_html }}</div>{% endif %}
+        {% if a.takeaway_html %}<div class="live-item-takeaway">{{ a.takeaway_html }}</div>{% endif %}
         {% if a.actor_tags %}
         <div class="live-item-actors">
           {% for actor in a.actor_tags %}
@@ -111,12 +91,25 @@
         {% endif %}
       </div>
     </div>
+    <div class="live-fb">
+      <form method="post" action="/live/feedback">
+        <input type="hidden" name="item_id" value="{{ a.id }}"><input type="hidden" name="rating" value="up">
+        <button type="submit" class="fb-btn">{% if lang == 'en' %}relevant{% else %}pertinent{% endif %}</button>
+      </form>
+      <form method="post" action="/live/feedback">
+        <input type="hidden" name="item_id" value="{{ a.id }}"><input type="hidden" name="rating" value="down">
+        <button type="submit" class="fb-btn">{% if lang == 'en' %}off-topic{% else %}hors sujet{% endif %}</button>
+      </form>
+      <form method="post" action="/live/delete" class="live-delete-form" onsubmit="return confirmDelete(this)">
+        <input type="hidden" name="item_id" value="{{ a.id }}">
+        <button type="submit" class="fb-btn fb-btn--drop btn-delete">{% if lang == 'en' %}remove{% else %}retirer{% endif %}</button>
+      </form>
+    </div>
   </div>
   {% endfor %}
 
   {% if not feed %}
   <div class="live-empty">
-    <div class="empty-icon">📡</div>
     <p>{{ t.empty_live | safe }}</p>
   </div>
   {% endif %}

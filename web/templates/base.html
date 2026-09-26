@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="fr" data-theme="dark">
+<html lang="fr" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Veille Tech{% endblock %}</title>
   <script>
     (function() {
-      var t = localStorage.getItem('vt-theme') || 'dark';
+      var t = localStorage.getItem('vt-theme') || 'light';
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
@@ -15,11 +15,10 @@
 <body>
   <nav class="navbar">
     <a href="/" class="nav-brand">
-      <div class="nav-logo">📡</div>
       Veille Tech
     </a>
     <div class="nav-right">
-      <a href="/live" class="nav-pill">⚡ Live{% if watch_enabled %}<span class="nav-live-dot"></span>{% endif %}</a>
+      <a href="/live" class="nav-pill">Live{% if watch_enabled %}<span class="nav-live-dot"></span>{% endif %}</a>
       <form method="post" action="/language" class="nav-lang" title="{{ t.lang if t else 'Langue' }}">
         <input type="hidden" name="next" value="{{ request.url.path }}">
         <button type="submit" name="lang" value="fr" class="nav-lang-pill {% if lang == 'fr' %}nav-lang-pill--active{% endif %}">FR</button>
@@ -59,7 +58,7 @@
       moon.style.display = theme === 'dark'  ? '' : 'none';
       sun.style.display  = theme === 'light' ? '' : 'none';
     }
-    _syncIcons(document.documentElement.getAttribute('data-theme') || 'dark');
+    _syncIcons(document.documentElement.getAttribute('data-theme') || 'light');
   </script>
 </body>
 </html>

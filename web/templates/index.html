@@ -5,8 +5,8 @@
 <div class="page-header">
   <div class="page-header-left">
     <div>
-      <h1 class="page-title">Veille Tech</h1>
-      <p class="page-sub">{{ profile_icon }} {{ profile_name }} — {{ profile_desc }}</p>
+      <h1 class="page-title">{{ profile_name }}</h1>
+      <p class="page-sub">{{ profile_desc }}</p>
     </div>
   </div>
   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -45,13 +45,13 @@
 </div>
 
 {% if msg == "profile_changed" %}
-<div class="toast toast--success">✓ {{ t.toast_profile }}</div>
+<div class="toast toast--success">{{ t.toast_profile }}</div>
 {% elif msg == "veille_started" %}
-<div class="toast toast--info">⏳ {{ t.toast_started }}</div>
+<div class="toast toast--info">{{ t.toast_started }}</div>
 {% elif msg == "lang_changed" %}
-<div class="toast toast--success">✓ {{ t.toast_lang }}</div>
+<div class="toast toast--success">{{ t.toast_lang }}</div>
 {% elif msg == "deleted" %}
-<div class="toast toast--success">✓ {{ t.toast_deleted }}</div>
+<div class="toast toast--success">{{ t.toast_deleted }}</div>
 {% endif %}
 
 {% if pipeline_error %}
@@ -128,7 +128,7 @@
           <input type="radio" name="profile" value="{{ key }}"
                  {% if key == profile_key %}checked{% endif %}
                  onchange="this.form.submit()" style="display:none">
-          <span class="profile-icon">{{ p.icon }}</span>
+          
           <div class="profile-text">
             <span class="profile-name">{{ p.name }}</span>
             <span class="profile-desc">{{ p.description }}</span>
@@ -163,7 +163,7 @@
           <circle class="running-ring-fill" cx="18" cy="18" r="15" fill="none" stroke-width="2"
                   stroke-dasharray="30 65" stroke-linecap="round"/>
         </svg>
-        <span class="running-ring-icon">📡</span>
+        
       </div>
       <div class="running-title">{{ t.analyzing }}</div>
       <div class="running-sub">{{ t.locked | safe }}</div>
@@ -183,7 +183,7 @@
       {% for brief in briefs %}
       <div class="brief-row">
         <a href="/brief/{{ brief.filename }}" class="brief-row-left">
-          <div class="brief-row-icon">📄</div>
+          
           <div class="brief-row-text">
             <span class="brief-date">{{ brief.date }}</span>
             <span class="brief-articles">{{ brief.article_count }} {{ t.articles }}</span>
@@ -205,7 +205,7 @@
     </div>
     {% else %}
     <div class="empty">
-      <div class="empty-icon">📭</div>
+      
       <p>{{ t.empty_briefs | safe }}</p>
     </div>
     {% endif %}

@@ -4,6 +4,17 @@ import os
 import sys
 import uvicorn
 
+# Une console Windows par défaut est en cp1252 : le premier print de la
+# bannière, qui contient un emoji, lève UnicodeEncodeError et l'application
+# ne démarre pas du tout. Le lanceur mourait avant le serveur, pour un
+# caractère décoratif. On force donc la sortie en UTF-8 au lieu de compter
+# sur l'encodage du terminal.
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 # Magasin de certificats système (antivirus / proxy TLS) — voir main.py
 try:
     import truststore
